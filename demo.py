@@ -21,6 +21,21 @@ def main():
         print(f"❌ 错误: {e}")
         return
     
+    # 显示仓库信息
+    repo_info = analyzer.get_repo_info()
+    print(f"\n📁 仓库信息:")
+    print("-" * 30)
+    print(f"📍 路径: {repo_info['path']}")
+    print(f"🌿 当前分支: {repo_info['current_branch']}")
+    print(f"📊 总分支数: {repo_info['total_branches']}")
+    
+    if repo_info['remote_urls']:
+        print("🔗 Remote URLs:")
+        for remote in repo_info['remote_urls']:
+            print(f"   • {remote['name']}: {remote['url']}")
+    else:
+        print("🔗 Remote URLs: 无远程仓库")
+    
     # 获取基本统计信息
     print("\n📊 基本统计信息:")
     print("-" * 30)

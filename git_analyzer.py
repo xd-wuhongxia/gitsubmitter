@@ -30,6 +30,49 @@ class GitAnalyzer:
         
         self.repo_path = repo_path
     
+    def get_repo_info(self) -> dict:
+        """
+        获取仓库基本信息
+        
+        Returns:
+            包含仓库信息的字典
+        """
+        repo_info = {
+            'path': os.path.abspath(self.repo_path),
+            'remote_urls': [],
+            'current_branch': None,
+            'total_branches': 0,
+            'is_bare': self.repo.bare
+        }
+        
+        try:
+            # 获取当前分支
+            if not self.repo.head.is_detached:
+                repo_info['current_branch'] = self.repo.active_branch.name
+            else:
+                repo_info['current_branch'] = 'HEAD (detached)'
+        except Exception:
+            repo_info['current_branch'] = 'unknown'
+        
+        try:
+            # 获取所有remote URL
+            for remote in self.repo.remotes:
+                for url in remote.urls:
+                    repo_info['remote_urls'].append({
+                        'name': remote.name,
+                        'url': url
+                    })
+        except Exception:
+            pass
+        
+        try:
+            # 获取分支总数
+            repo_info['total_branches'] = len(list(self.repo.branches))
+        except Exception:
+            repo_info['total_branches'] = 0
+        
+        return repo_info
+    
     def get_commit_stats(self, 
                         since_date: Optional[datetime] = None,
                         until_date: Optional[datetime] = None,

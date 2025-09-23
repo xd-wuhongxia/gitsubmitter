@@ -192,16 +192,16 @@ def display_commit_analysis(commits_df: pd.DataFrame, visualizer: GitVisualizer)
         st.warning("暂无提交数据可供分析")
         return
     
-    # 提交时间线
-    st.markdown("### 提交时间线")
-    timeline_fig = visualizer.plot_commit_timeline(commits_df)
-    st.plotly_chart(timeline_fig, use_container_width=True)
+        # 提交时间线
+        st.markdown("### 提交时间线")
+        timeline_fig = visualizer.plot_commit_timeline(commits_df)
+        st.plotly_chart(timeline_fig, width='stretch')
     
     # 最近提交列表
     st.markdown("### 最近提交")
-    recent_commits = commits_df.head(10)[['hash', 'author', 'date', 'message', 'files_changed', 'lines_changed']]
+    recent_commits = commits_df.head(10)[['hash', 'author', 'date', 'message', 'files_changed', 'lines_changed']].copy()
     recent_commits['date'] = recent_commits['date'].dt.strftime('%Y-%m-%d %H:%M')
-    st.dataframe(recent_commits, use_container_width=True)
+        st.dataframe(recent_commits, width='stretch')
 
 
 def display_author_analysis(author_stats: pd.DataFrame, visualizer: GitVisualizer):
@@ -218,7 +218,7 @@ def display_author_analysis(author_stats: pd.DataFrame, visualizer: GitVisualize
         # 作者贡献饼图
         st.markdown("### 提交贡献分布")
         contrib_fig = visualizer.plot_author_contributions(author_stats)
-        st.plotly_chart(contrib_fig, use_container_width=True)
+        st.plotly_chart(contrib_fig, width='stretch')
     
     with col2:
         # 作者统计表
@@ -227,7 +227,7 @@ def display_author_analysis(author_stats: pd.DataFrame, visualizer: GitVisualize
             'author', 'commits_count', 'total_lines_changed', 
             'avg_lines_per_commit', 'active_days'
         ]].round(2)
-        st.dataframe(display_stats, use_container_width=True)
+        st.dataframe(display_stats, width='stretch')
 
 
 def display_time_analysis(analyzer: GitAnalyzer, config: dict, visualizer: GitVisualizer):
@@ -249,7 +249,7 @@ def display_time_analysis(analyzer: GitAnalyzer, config: dict, visualizer: GitVi
         # 代码变更趋势
         st.markdown("### 代码变更趋势")
         trend_fig = visualizer.plot_lines_trend(time_series)
-        st.plotly_chart(trend_fig, use_container_width=True)
+        st.plotly_chart(trend_fig, width='stretch')
         
     except Exception as e:
         st.error(f"时间分析出错: {str(e)}")
@@ -283,13 +283,13 @@ def display_merge_analysis(analyzer: GitAnalyzer, config: dict, visualizer: GitV
         
         # 合并频率图
         merge_freq_fig = visualizer.plot_merge_frequency(merge_stats)
-        st.plotly_chart(merge_freq_fig, use_container_width=True)
+        st.plotly_chart(merge_freq_fig, width='stretch')
         
         # 最近合并列表
         st.markdown("### 最近合并")
-        recent_merges = merge_stats.head(10)[['hash', 'author', 'date', 'source_branch', 'target_branch']]
+        recent_merges = merge_stats.head(10)[['hash', 'author', 'date', 'source_branch', 'target_branch']].copy()
         recent_merges['date'] = recent_merges['date'].dt.strftime('%Y-%m-%d %H:%M')
-        st.dataframe(recent_merges, use_container_width=True)
+        st.dataframe(recent_merges, width='stretch')
         
     except Exception as e:
         st.error(f"合并分析出错: {str(e)}")
@@ -315,14 +315,14 @@ def display_file_analysis(analyzer: GitAnalyzer, config: dict, visualizer: GitVi
         # 文件类型分布
         st.markdown("### 文件类型修改分布")
         file_dist_fig = visualizer.plot_file_changes_distribution(file_stats)
-        st.plotly_chart(file_dist_fig, use_container_width=True)
+        st.plotly_chart(file_dist_fig, width='stretch')
         
         # 最常修改的文件
         st.markdown("### 最常修改的文件")
         top_files = file_stats.nlargest(20, 'modifications')[
             ['file_path', 'modifications', 'total_changes', 'authors_count']
         ]
-        st.dataframe(top_files, use_container_width=True)
+        st.dataframe(top_files, width='stretch')
         
     except Exception as e:
         st.error(f"文件分析出错: {str(e)}")
@@ -341,15 +341,15 @@ def display_branch_analysis(analyzer: GitAnalyzer, visualizer: GitVisualizer):
         
         # 分支活跃度
         branch_activity_fig = visualizer.plot_branch_activity(branch_stats)
-        st.plotly_chart(branch_activity_fig, use_container_width=True)
+        st.plotly_chart(branch_activity_fig, width='stretch')
         
         # 分支详情
         st.markdown("### 分支详情")
         display_branches = branch_stats[[
             'branch_name', 'commits_count', 'last_commit_date', 'last_author', 'is_active'
-        ]]
+        ]].copy()
         display_branches['last_commit_date'] = display_branches['last_commit_date'].dt.strftime('%Y-%m-%d %H:%M')
-        st.dataframe(display_branches, use_container_width=True)
+        st.dataframe(display_branches, width='stretch')
         
     except Exception as e:
         st.error(f"分支分析出错: {str(e)}")
@@ -372,11 +372,27 @@ def main():
         analyzer = GitAnalyzer(config['repo_path'])
         visualizer = GitVisualizer()
         
-        # 显示仓库信息
+        # 获取并显示仓库信息
+        repo_info = analyzer.get_repo_info()
+        
+        remote_info = ""
+        if repo_info['remote_urls']:
+            remote_info = "<br><strong>🔗 Remote URLs:</strong><br>"
+            for remote in repo_info['remote_urls']:
+                # 简化显示长URL
+                display_url = remote['url']
+                if len(display_url) > 60:
+                    display_url = display_url[:57] + "..."
+                remote_info += f"&nbsp;&nbsp;• {remote['name']}: <code>{display_url}</code><br>"
+        else:
+            remote_info = "<br><strong>🔗 Remote URLs:</strong> 无远程仓库"
+        
         st.markdown(f"""
         <div class="info-box">
-        <strong>📁 分析仓库:</strong> {os.path.abspath(config['repo_path'])}<br>
-        <strong>🌿 分析分支:</strong> {config['branch']}<br>
+        <strong>📁 分析仓库:</strong> {repo_info['path']}<br>
+        <strong>🌿 当前分支:</strong> {repo_info['current_branch']}<br>
+        <strong>🔍 分析分支:</strong> {config['branch']}<br>
+        <strong>📊 总分支数:</strong> {repo_info['total_branches']}{remote_info}<br>
         <strong>📅 时间范围:</strong> {config['start_date'] or '开始'} 至 {config['end_date'] or '结束'}
         </div>
         """, unsafe_allow_html=True)
