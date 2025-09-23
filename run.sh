@@ -43,4 +43,4 @@ echo
 echo "按 Ctrl+C 停止应用"
 echo
 
-streamlit run app.py
+$PYTHON_CMD -m streamlit run app.py

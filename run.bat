@@ -30,6 +30,6 @@ echo.
 echo 按 Ctrl+C 停止应用
 echo.
 
-streamlit run app.py
+python -m streamlit run app.py
 
 pause
