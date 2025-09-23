@@ -150,6 +150,32 @@ ai-submitter/
 - 定期清理浏览器缓存
 - 确保有足够的系统内存
 
+## 快速开始
+
+### 方式一：使用启动脚本（推荐）
+
+**Windows用户：**
+```bash
+# 双击运行或在命令行执行
+run.bat
+```
+
+**Linux/Mac用户：**
+```bash
+# 在终端执行
+./run.sh
+```
+
+### 方式二：手动启动
+
+```bash
+# 安装依赖
+pip install -r requirements.txt
+
+# 启动应用
+streamlit run app.py
+```
+
 ## 贡献
 
 欢迎提交Issue和Pull Request来改进这个项目！
