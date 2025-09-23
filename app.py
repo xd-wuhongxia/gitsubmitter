@@ -201,7 +201,7 @@ def display_commit_analysis(commits_df: pd.DataFrame, visualizer: GitVisualizer)
     st.markdown("### 最近提交")
     recent_commits = commits_df.head(10)[['hash', 'author', 'date', 'message', 'files_changed', 'lines_changed']].copy()
     recent_commits['date'] = recent_commits['date'].dt.strftime('%Y-%m-%d %H:%M')
-        st.dataframe(recent_commits, width='stretch')
+    st.dataframe(recent_commits, width='stretch')
 
 
 def display_author_analysis(author_stats: pd.DataFrame, visualizer: GitVisualizer):
