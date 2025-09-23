@@ -63,12 +63,18 @@ class GitAnalyzer:
             # 获取提交统计
             stats = commit.stats.total
             
+            # 确保日期是datetime对象
+            commit_date = commit.committed_datetime
+            if hasattr(commit_date, 'replace'):
+                # 移除时区信息以避免兼容性问题
+                commit_date = commit_date.replace(tzinfo=None)
+            
             commits_data.append({
                 'hash': commit.hexsha[:8],
                 'full_hash': commit.hexsha,
                 'author': commit.author.name,
                 'author_email': commit.author.email,
-                'date': commit.committed_datetime,
+                'date': commit_date,
                 'message': commit.message.strip(),
                 'files_changed': stats['files'],
                 'insertions': stats['insertions'],
@@ -119,11 +125,16 @@ class GitAnalyzer:
                     source_branch = match.group(1)
                     target_branch = match.group(2)
                 
+                # 确保日期是datetime对象
+                commit_date = commit.committed_datetime
+                if hasattr(commit_date, 'replace'):
+                    commit_date = commit_date.replace(tzinfo=None)
+                
                 merge_data.append({
                     'hash': commit.hexsha[:8],
                     'full_hash': commit.hexsha,
                     'author': commit.author.name,
-                    'date': commit.committed_datetime,
+                    'date': commit_date,
                     'message': commit.message.strip(),
                     'source_branch': source_branch,
                     'target_branch': target_branch,
@@ -256,10 +267,15 @@ class GitAnalyzer:
                     # 计算分支的提交数量
                     commit_count = len(list(self.repo.iter_commits(branch)))
                     
+                    # 确保日期是datetime对象
+                    commit_date = last_commit.committed_datetime
+                    if hasattr(commit_date, 'replace'):
+                        commit_date = commit_date.replace(tzinfo=None)
+                    
                     branch_data.append({
                         'branch_name': branch.name,
                         'last_commit_hash': last_commit.hexsha[:8],
-                        'last_commit_date': last_commit.committed_datetime,
+                        'last_commit_date': commit_date,
                         'last_author': last_commit.author.name,
                         'commits_count': commit_count,
                         'is_active': branch == self.repo.active_branch
