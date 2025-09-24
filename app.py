@@ -986,7 +986,7 @@ def display_mr_management(analyzer, config):
                     st.rerun()
                 else:
                     st.error("请输入有效的token")
-        return
+        return  # 只有在没有token时才返回
     
     # 初始化GitHub集成
     try:
@@ -1001,6 +1001,21 @@ def display_mr_management(analyzer, config):
             return
         
         st.success(f"✅ GitHub连接成功: {message}")
+        
+        # 显示连接成功后的提示
+        with st.expander("💡 使用提示", expanded=False):
+            st.markdown("""
+            **GitHub连接已建立，现在您可以：**
+            1. 在下方输入要管理的仓库地址
+            2. 设置时间范围和PR状态筛选
+            3. 点击"刷新PR数据"获取数据
+            
+            **热门仓库示例：**
+            - `microsoft/vscode` - Visual Studio Code
+            - `facebook/react` - React JavaScript库
+            - `tensorflow/tensorflow` - TensorFlow机器学习
+            - `kubernetes/kubernetes` - Kubernetes容器编排
+            """)
         
     except Exception as e:
         st.error(f"❌ GitHub集成初始化失败: {str(e)}")
@@ -1052,6 +1067,19 @@ def display_mr_management(analyzer, config):
     
     if not repo_input:
         st.info("💡 请输入要管理的GitHub仓库地址")
+        st.markdown("#### 🚀 快速开始")
+        st.markdown("""
+        **设置完成后，请按以下步骤操作：**
+        1. ✅ GitHub Token 已配置
+        2. 📝 在上方输入要管理的仓库地址
+        3. 🔄 点击"刷新PR数据"获取数据
+        4. 📋 查看和管理Pull Requests
+        
+        **支持的仓库地址格式：**
+        - `owner/repo` (例如: `microsoft/vscode`)
+        - `https://github.com/owner/repo`
+        - `https://github.com/owner/repo.git`
+        """)
         return
     
     # 获取PR数据
