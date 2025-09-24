@@ -253,6 +253,28 @@ class MRDatabase:
             
             return [dict(row) for row in rows]
     
+    def get_pr_id_by_number(self, repo_url: str, pr_number: int) -> Optional[int]:
+        """
+        通过仓库URL和PR编号获取数据库ID
+        
+        Args:
+            repo_url: 仓库URL
+            pr_number: PR编号
+            
+        Returns:
+            数据库中的PR ID，如果不存在返回None
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                'SELECT id FROM pull_requests WHERE repo_url=? AND pr_number=?',
+                (repo_url, pr_number)
+            )
+            
+            result = cursor.fetchone()
+            return result[0] if result else None
+    
     def get_pr_details(self, pr_id: int) -> Optional[Dict]:
         """
         获取PR详细信息，包括review结果和操作历史

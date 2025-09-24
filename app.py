@@ -1006,6 +1006,20 @@ def display_mr_management(analyzer, config):
         st.error(f"❌ GitHub集成初始化失败: {str(e)}")
         return
     
+    # 用户设置
+    if 'user_name' not in st.session_state:
+        st.session_state['user_name'] = 'Unknown User'
+    
+    with st.expander("👤 用户设置"):
+        user_name = st.text_input(
+            "操作人名称",
+            value=st.session_state.get('user_name', 'Unknown User'),
+            help="设置您的名称，将记录在操作历史中"
+        )
+        if st.button("保存用户设置"):
+            st.session_state['user_name'] = user_name
+            st.success(f"✅ 用户名已设置为: {user_name}")
+    
     # 仓库选择和配置
     st.markdown("#### 📁 仓库设置")
     
@@ -1096,22 +1110,30 @@ def display_mr_management(analyzer, config):
         
         # 准备表格数据
         table_data = []
+        db = MRDatabase()  # 在循环外创建数据库连接
+        
         for pr in mr_data:
-            # 获取数据库中的review结果
-            db = MRDatabase()
-            pr_details = db.get_pr_details(pr.get('id', 0))
+            # 通过repo_url和pr_number获取数据库中的PR ID
+            pr_id = db.get_pr_id_by_number(pr['repo_url'], pr['pr_number'])
             
             review_score = "N/A"
             security_issues = 0
             code_issues = 0
             risk_level = "Unknown"
             
-            if pr_details and pr_details.get('reviews'):
-                latest_review = pr_details['reviews'][0]  # 最新的review
-                review_score = f"{latest_review.get('score', 0):.1f}/10" if latest_review.get('score') else "N/A"
-                security_issues = latest_review.get('security_issues', 0)
-                code_issues = latest_review.get('code_issues', 0)
-                risk_level = latest_review.get('risk_level', 'Unknown').title()
+            if pr_id:
+                # 获取数据库中的review结果
+                pr_details = db.get_pr_details(pr_id)
+                
+                if pr_details and pr_details.get('reviews'):
+                    latest_review = pr_details['reviews'][0]  # 最新的review
+                    review_score = f"{latest_review.get('score', 0):.1f}/10" if latest_review.get('score') else "N/A"
+                    security_issues = latest_review.get('security_issues', 0)
+                    code_issues = latest_review.get('code_issues', 0)
+                    risk_level = latest_review.get('risk_level', 'Unknown').title()
+                
+                # 将数据库ID添加到PR数据中，供后续操作使用
+                pr['db_id'] = pr_id
             
             table_data.append({
                 'PR#': pr['pr_number'],
@@ -1187,46 +1209,70 @@ def display_mr_management(analyzer, config):
                 if selected_pr['status'] == 'open':
                     col1, col2, col3 = st.columns([1, 1, 2])
                     
-                    with col1:
-                        if st.button("✅ Approve", type="primary"):
-                            # 记录approve操作
-                            db = MRDatabase()
-                            # 这里需要获取PR的数据库ID
-                            pr_id = db.insert_or_update_pr(selected_pr)
-                            db.record_operation(
-                                pr_id, 
-                                'approve', 
-                                st.session_state.get('user_name', 'Unknown User'),
-                                f"通过Streamlit界面批准PR #{selected_pr_num}"
-                            )
-                            st.success(f"✅ 已批准PR #{selected_pr_num}")
+                    # 获取当前选中PR的数据库ID
+                    db = MRDatabase()
+                    selected_pr_db_id = selected_pr.get('db_id') or db.get_pr_id_by_number(selected_pr['repo_url'], selected_pr['pr_number'])
                     
-                    with col2:
-                        if st.button("❌ Reject", type="secondary"):
-                            # 记录reject操作
-                            db = MRDatabase()
-                            pr_id = db.insert_or_update_pr(selected_pr)
-                            db.record_operation(
-                                pr_id,
-                                'reject',
-                                st.session_state.get('user_name', 'Unknown User'),
-                                f"通过Streamlit界面拒绝PR #{selected_pr_num}"
-                            )
-                            st.error(f"❌ 已拒绝PR #{selected_pr_num}")
-                    
-                    with col3:
-                        comment = st.text_input("添加评论", placeholder="可选：添加操作备注")
-                        if st.button("💬 添加评论"):
-                            if comment:
-                                db = MRDatabase()
-                                pr_id = db.insert_or_update_pr(selected_pr)
-                                db.record_operation(
-                                    pr_id,
-                                    'comment',
+                    if not selected_pr_db_id:
+                        st.warning(f"⚠️ 无法找到PR #{selected_pr_num} 的数据库记录，请先刷新PR数据")
+                    else:
+                        col1, col2, col3 = st.columns([1, 1, 2])
+                        
+                        with col1:
+                            if st.button("✅ Approve", type="primary", key=f"approve_{selected_pr_num}"):
+                                # 记录approve操作
+                                operation_id = db.record_operation(
+                                    selected_pr_db_id, 
+                                    'approve', 
                                     st.session_state.get('user_name', 'Unknown User'),
-                                    comment
+                                    f"通过Streamlit界面批准PR #{selected_pr_num}"
                                 )
-                                st.info(f"💬 已添加评论到PR #{selected_pr_num}")
+                                st.success(f"✅ 已批准PR #{selected_pr_num} (操作ID: {operation_id})")
+                                # 清除操作历史缓存，强制刷新
+                                if 'operation_history' in st.session_state:
+                                    del st.session_state['operation_history']
+                        
+                        with col2:
+                            if st.button("❌ Reject", type="secondary", key=f"reject_{selected_pr_num}"):
+                                # 记录reject操作
+                                operation_id = db.record_operation(
+                                    selected_pr_db_id,
+                                    'reject',
+                                    st.session_state.get('user_name', 'Unknown User'),
+                                    f"通过Streamlit界面拒绝PR #{selected_pr_num}"
+                                )
+                                st.error(f"❌ 已拒绝PR #{selected_pr_num} (操作ID: {operation_id})")
+                                # 清除操作历史缓存，强制刷新
+                                if 'operation_history' in st.session_state:
+                                    del st.session_state['operation_history']
+                        
+                        with col3:
+                            # 使用session state来管理评论输入
+                            comment_key = f"comment_{selected_pr_num}"
+                            comment = st.text_input(
+                                "添加评论", 
+                                placeholder="可选：添加操作备注",
+                                key=comment_key
+                            )
+                            
+                            if st.button("💬 添加评论", key=f"add_comment_{selected_pr_num}"):
+                                if comment and comment.strip():
+                                    operation_id = db.record_operation(
+                                        selected_pr_db_id,
+                                        'comment',
+                                        st.session_state.get('user_name', 'Unknown User'),
+                                        comment.strip()
+                                    )
+                                    st.success(f"💬 已添加评论到PR #{selected_pr_num} (操作ID: {operation_id})")
+                                    # 清空评论输入框
+                                    st.session_state[comment_key] = ""
+                                    # 清除操作历史缓存，强制刷新
+                                    if 'operation_history' in st.session_state:
+                                        del st.session_state['operation_history']
+                                    # 重新运行页面以更新显示
+                                    st.rerun()
+                                else:
+                                    st.warning("请输入评论内容")
                 else:
                     st.info(f"ℹ️ PR #{selected_pr_num} 状态为 {selected_pr['status']}，无法进行approve/reject操作")
         else:
