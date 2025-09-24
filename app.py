@@ -8,6 +8,7 @@ import numpy as np
 from datetime import datetime, timedelta, date
 import os
 from pathlib import Path
+import git
 
 # 导入自定义模块
 from git_analyzer import GitAnalyzer
@@ -70,17 +71,175 @@ def load_custom_css():
     """, unsafe_allow_html=True)
 
 
+def validate_git_repo(repo_path: str) -> tuple[bool, str]:
+    """
+    验证Git仓库路径
+    
+    Args:
+        repo_path: 仓库路径
+        
+    Returns:
+        (是否有效, 错误消息)
+    """
+    try:
+        if not repo_path or repo_path.strip() == "":
+            return False, "请输入仓库路径"
+        
+        repo_path = repo_path.strip()
+        
+        # 检查路径是否存在
+        if not os.path.exists(repo_path):
+            return False, f"路径不存在: {repo_path}"
+        
+        # 检查是否是目录
+        if not os.path.isdir(repo_path):
+            return False, f"路径不是目录: {repo_path}"
+        
+        # 检查是否是Git仓库
+        try:
+            test_repo = git.Repo(repo_path)
+            return True, "✅ 有效的Git仓库"
+        except git.exc.InvalidGitRepositoryError:
+            return False, f"不是有效的Git仓库: {repo_path}"
+        except Exception as e:
+            return False, f"访问仓库时出错: {str(e)}"
+            
+    except Exception as e:
+        return False, f"验证路径时出错: {str(e)}"
+
+
+def get_recent_repos() -> list:
+    """获取最近使用的仓库列表"""
+    # 从session state中获取最近使用的仓库
+    if 'recent_repos' not in st.session_state:
+        st.session_state.recent_repos = [
+            ".",
+            "..",
+        ]
+    
+    # 添加一些常见路径（如果不存在）
+    common_paths = [
+        os.path.expanduser("~"),
+        "D:/",
+        "C:/",
+    ]
+    
+    recent_list = st.session_state.recent_repos.copy()
+    for path in common_paths:
+        if path not in recent_list and os.path.exists(path):
+            recent_list.append(path)
+    
+    return recent_list[:10]  # 最多显示10个
+
+
+def add_to_recent_repos(repo_path: str):
+    """添加仓库到最近使用列表"""
+    if 'recent_repos' not in st.session_state:
+        st.session_state.recent_repos = []
+    
+    # 移除已存在的相同路径
+    if repo_path in st.session_state.recent_repos:
+        st.session_state.recent_repos.remove(repo_path)
+    
+    # 添加到列表开头
+    st.session_state.recent_repos.insert(0, repo_path)
+    
+    # 保持列表长度不超过10
+    st.session_state.recent_repos = st.session_state.recent_repos[:10]
+
+
 def sidebar_controls():
     """侧边栏控件"""
     st.sidebar.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
-    st.sidebar.markdown("### 🔧 分析配置")
+    st.sidebar.markdown("### 📁 Git仓库选择")
     
-    # Git仓库路径选择
-    repo_path = st.sidebar.text_input(
-        "Git仓库路径",
-        value=".",
-        help="输入Git仓库的路径，默认为当前目录"
+    # 仓库路径选择方式
+    input_method = st.sidebar.radio(
+        "选择输入方式",
+        ["📝 手动输入", "📋 最近使用", "📂 浏览选择"],
+        help="选择Git仓库路径的输入方式"
     )
+    
+    repo_path = "."
+    
+    if input_method == "📝 手动输入":
+        repo_path = st.sidebar.text_input(
+            "Git仓库路径",
+            value=".",
+            help="输入Git仓库的绝对或相对路径",
+            placeholder="例如: . 或 /path/to/repo 或 C:\\path\\to\\repo"
+        )
+    
+    elif input_method == "📋 最近使用":
+        recent_repos = get_recent_repos()
+        repo_path = st.sidebar.selectbox(
+            "选择最近使用的仓库",
+            recent_repos,
+            help="从最近使用的仓库中选择"
+        )
+    
+    elif input_method == "📂 浏览选择":
+        st.sidebar.info("💡 在下方输入框中输入要分析的仓库路径")
+        repo_path = st.sidebar.text_input(
+            "仓库路径",
+            value=".",
+            help="输入要分析的Git仓库路径"
+        )
+    
+    # 实时验证仓库路径
+    is_valid, validation_msg = validate_git_repo(repo_path)
+    
+    if is_valid:
+        st.sidebar.success(validation_msg)
+    else:
+        st.sidebar.error(validation_msg)
+        # 如果路径无效，回退到当前目录
+        if repo_path != ".":
+            st.sidebar.warning("⚠️ 将使用当前目录作为备选")
+            fallback_valid, _ = validate_git_repo(".")
+            if fallback_valid:
+                repo_path = "."
+            else:
+                st.sidebar.error("❌ 当前目录也不是有效的Git仓库")
+    
+    # 显示仓库信息预览
+    if is_valid:
+        try:
+            preview_analyzer = GitAnalyzer(repo_path)
+            repo_info = preview_analyzer.get_repo_info()
+            
+            st.sidebar.markdown("#### 📊 仓库预览")
+            st.sidebar.markdown(f"**路径**: `{repo_info['path']}`")
+            st.sidebar.markdown(f"**当前分支**: `{repo_info['current_branch']}`")
+            st.sidebar.markdown(f"**分支总数**: {repo_info['total_branches']}")
+            
+            if repo_info['remote_urls']:
+                st.sidebar.markdown("**Remote URLs**:")
+                for remote in repo_info['remote_urls'][:2]:  # 最多显示2个
+                    url_display = remote['url']
+                    if len(url_display) > 30:
+                        url_display = url_display[:27] + "..."
+                    st.sidebar.markdown(f"• `{remote['name']}`: {url_display}")
+                if len(repo_info['remote_urls']) > 2:
+                    st.sidebar.markdown(f"• ... 还有 {len(repo_info['remote_urls']) - 2} 个")
+            else:
+                st.sidebar.markdown("**Remote URLs**: 无")
+                
+        except Exception as e:
+            st.sidebar.warning(f"获取仓库预览失败: {str(e)}")
+    
+    # 快速操作按钮
+    col1, col2 = st.sidebar.columns(2)
+    with col1:
+        if st.button("🔄 刷新", help="重新加载当前仓库数据"):
+            st.rerun()
+    with col2:
+        if st.button("🗑️ 清除历史", help="清除最近使用的仓库历史"):
+            st.session_state.recent_repos = []
+            st.rerun()
+    
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### ⚙️ 分析配置")
     
     # 日期范围选择
     st.sidebar.markdown("#### 📅 时间范围")
@@ -131,21 +290,43 @@ def sidebar_controls():
     }
 
 
+@st.cache_data(ttl=300)  # 缓存5分钟
+def get_cached_commit_stats(repo_path: str, start_date, end_date, branch: str):
+    """缓存的提交统计获取"""
+    analyzer = GitAnalyzer(repo_path)
+    return analyzer.get_commit_stats(
+        since_date=datetime.combine(start_date, datetime.min.time()) if start_date else None,
+        until_date=datetime.combine(end_date, datetime.min.time()) if end_date else None,
+        branch=branch
+    )
+
+@st.cache_data(ttl=300)  # 缓存5分钟  
+def get_cached_author_stats(repo_path: str, start_date, end_date):
+    """缓存的作者统计获取"""
+    analyzer = GitAnalyzer(repo_path)
+    return analyzer.get_author_stats(
+        since_date=datetime.combine(start_date, datetime.min.time()) if start_date else None,
+        until_date=datetime.combine(end_date, datetime.min.time()) if end_date else None
+    )
+
+
 def display_overview_metrics(analyzer: GitAnalyzer, config: dict):
     """显示概览指标"""
     st.markdown("## 📈 统计概览")
     
     try:
-        # 获取基础统计
-        commits_df = analyzer.get_commit_stats(
-            since_date=datetime.combine(config['start_date'], datetime.min.time()) if config['start_date'] else None,
-            until_date=datetime.combine(config['end_date'], datetime.min.time()) if config['end_date'] else None,
-            branch=config['branch']
+        # 使用缓存获取基础统计
+        commits_df = get_cached_commit_stats(
+            config['repo_path'],
+            config['start_date'],
+            config['end_date'], 
+            config['branch']
         )
         
-        author_stats = analyzer.get_author_stats(
-            since_date=datetime.combine(config['start_date'], datetime.min.time()) if config['start_date'] else None,
-            until_date=datetime.combine(config['end_date'], datetime.min.time()) if config['end_date'] else None
+        author_stats = get_cached_author_stats(
+            config['repo_path'],
+            config['start_date'],
+            config['end_date']
         )
         
         # 显示关键指标
@@ -497,6 +678,25 @@ def main():
     
     # 初始化分析器
     try:
+        # 验证仓库路径
+        is_valid, validation_msg = validate_git_repo(config['repo_path'])
+        
+        if not is_valid:
+            st.error(f"❌ 仓库路径无效: {validation_msg}")
+            st.markdown("""
+            <div class="warning-box">
+            <strong>💡 解决方案:</strong><br>
+            1. 检查侧边栏中的仓库路径是否正确<br>
+            2. 确保该路径是有效的Git仓库<br>
+            3. 检查是否有访问该仓库的权限<br>
+            4. 尝试使用其他仓库路径
+            </div>
+            """, unsafe_allow_html=True)
+            return
+        
+        # 添加到最近使用列表
+        add_to_recent_repos(config['repo_path'])
+        
         analyzer = GitAnalyzer(config['repo_path'])
         visualizer = GitVisualizer()
         
@@ -515,15 +715,36 @@ def main():
         else:
             remote_info = "<br><strong>🔗 Remote URLs:</strong> 无远程仓库"
         
-        st.markdown(f"""
-        <div class="info-box">
-        <strong>📁 分析仓库:</strong> {repo_info['path']}<br>
-        <strong>🌿 当前分支:</strong> {repo_info['current_branch']}<br>
-        <strong>🔍 分析分支:</strong> {config['branch']}<br>
-        <strong>📊 总分支数:</strong> {repo_info['total_branches']}{remote_info}<br>
-        <strong>📅 时间范围:</strong> {config['start_date'] or '开始'} 至 {config['end_date'] or '结束'}
-        </div>
-        """, unsafe_allow_html=True)
+        # 添加仓库状态指示器
+        col1, col2, col3 = st.columns([2, 1, 1])
+        
+        with col1:
+            st.markdown(f"""
+            <div class="info-box">
+            <strong>📁 分析仓库:</strong> {repo_info['path']}<br>
+            <strong>🌿 当前分支:</strong> {repo_info['current_branch']}<br>
+            <strong>🔍 分析分支:</strong> {config['branch']}<br>
+            <strong>📊 总分支数:</strong> {repo_info['total_branches']}{remote_info}<br>
+            <strong>📅 时间范围:</strong> {config['start_date'] or '开始'} 至 {config['end_date'] or '结束'}
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            st.metric(
+                label="🔄 仓库状态",
+                value="✅ 已连接",
+                delta="有效Git仓库"
+            )
+        
+        with col3:
+            # 显示缓存状态
+            cache_info = st.cache_data.get_stats()
+            cache_hits = len(cache_info) if cache_info else 0
+            st.metric(
+                label="⚡ 缓存状态", 
+                value=f"{cache_hits} 项",
+                delta="数据已缓存" if cache_hits > 0 else "无缓存"
+            )
         
         # 显示各种分析
         commits_df, author_stats = display_overview_metrics(analyzer, config)
