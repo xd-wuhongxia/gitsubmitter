@@ -142,8 +142,17 @@ class GitAnalyzer:
         Returns:
             包含仓库信息的字典
         """
+        # 对于远程仓库，显示原始URL而不是临时路径
+        if self.is_remote:
+            display_path = self._normalize_remote_url(self.repo_path)
+        else:
+            display_path = os.path.abspath(self.repo_path)
+            
         repo_info = {
-            'path': os.path.abspath(self.repo_path),
+            'path': display_path,
+            'original_path': self.repo_path,  # 保存原始输入
+            'is_remote': self.is_remote,
+            'temp_dir': self.temp_dir if self.is_remote else None,
             'remote_urls': [],
             'current_branch': None,
             'total_branches': 0,

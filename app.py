@@ -832,7 +832,10 @@ def main():
         repo_info = analyzer.get_repo_info()
         
         remote_info = ""
-        if repo_info['remote_urls']:
+        # 对于远程仓库，显示原始URL而不是克隆后的remote信息
+        if repo_info.get('is_remote', False):
+            remote_info = f"<br><strong>🔗 原始URL:</strong> <code>{repo_info.get('original_path', 'unknown')}</code>"
+        elif repo_info['remote_urls']:
             remote_info = "<br><strong>🔗 Remote URLs:</strong><br>"
             for remote in repo_info['remote_urls']:
                 # 简化显示长URL
@@ -850,9 +853,17 @@ def main():
         col1, col2, col3 = st.columns([2, 1, 1])
         
         with col1:
+            # 根据是否是远程仓库调整显示内容
+            if repo_info.get('is_remote', False):
+                repo_type_info = f"🌐 <strong>远程仓库:</strong> {repo_info['path']}<br>"
+                if repo_info.get('temp_dir'):
+                    repo_type_info += f"📁 <strong>临时路径:</strong> {repo_info['temp_dir']}<br>"
+            else:
+                repo_type_info = f"📁 <strong>本地仓库:</strong> {repo_info['path']}<br>"
+            
             st.markdown(f"""
             <div class="info-box">
-            <strong>📁 分析仓库:</strong> {repo_info['path']}<br>
+            {repo_type_info}
             <strong>🌿 当前分支:</strong> {repo_info['current_branch']}<br>
             <strong>🔍 分析分支:</strong> {config['branch']}<br>
             <strong>📊 总分支数:</strong> {repo_info['total_branches']}{remote_info}<br>
@@ -861,10 +872,18 @@ def main():
             """, unsafe_allow_html=True)
         
         with col2:
+            # 根据仓库类型显示不同的状态
+            if repo_info.get('is_remote', False):
+                status_value = "🌐 已克隆"
+                status_delta = "远程仓库"
+            else:
+                status_value = "✅ 已连接"
+                status_delta = "本地仓库"
+                
             st.metric(
                 label="🔄 仓库状态",
-                value="✅ 已连接",
-                delta="有效Git仓库"
+                value=status_value,
+                delta=status_delta
             )
         
         with col3:
