@@ -715,6 +715,9 @@ def main():
         else:
             remote_info = "<br><strong>🔗 Remote URLs:</strong> 无远程仓库"
         
+        # 先获取数据用于状态显示
+        commits_df, author_stats = display_overview_metrics(analyzer, config)
+        
         # 添加仓库状态指示器
         col1, col2, col3 = st.columns([2, 1, 1])
         
@@ -737,17 +740,13 @@ def main():
             )
         
         with col3:
-            # 显示缓存状态
-            cache_info = st.cache_data.get_stats()
-            cache_hits = len(cache_info) if cache_info else 0
+            # 显示数据状态
+            total_commits = len(commits_df) if not commits_df.empty else 0
             st.metric(
-                label="⚡ 缓存状态", 
-                value=f"{cache_hits} 项",
-                delta="数据已缓存" if cache_hits > 0 else "无缓存"
+                label="📊 数据状态", 
+                value=f"{total_commits} 提交",
+                delta="数据已加载"
             )
-        
-        # 显示各种分析
-        commits_df, author_stats = display_overview_metrics(analyzer, config)
         
         # 创建选项卡
         tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
