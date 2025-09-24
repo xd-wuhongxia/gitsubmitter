@@ -293,9 +293,10 @@ def sidebar_controls():
             st.sidebar.markdown(f"**仓库URL**: `{normalized_url}`")
             st.sidebar.info("💡 远程仓库将在分析时临时克隆")
             st.sidebar.markdown("**克隆设置**:")
-            st.sidebar.markdown("• 深度: 最近100个提交")
+            st.sidebar.markdown("• 优先模式: 浅克隆（500个提交）")
+            st.sidebar.markdown("• 备用模式: 完整克隆（如需要）")
             st.sidebar.markdown("• 分支: 默认分支")
-            st.sidebar.markdown("• 模式: 浅克隆（快速）")
+            st.sidebar.markdown("• 自动清理: 分析完成后删除临时文件")
         else:
             # 本地仓库预览
             try:
@@ -794,9 +795,34 @@ def main():
         # 检查是否是远程仓库，显示加载进度
         if is_remote_repo_url(config['repo_path']):
             with st.spinner('🌐 正在克隆远程仓库，请稍候...'):
-                st.info(f"正在从 {normalize_remote_url(config['repo_path'])} 克隆仓库")
-                analyzer = GitAnalyzer(config['repo_path'])
-                st.success("✅ 远程仓库克隆完成！")
+                progress_info = st.empty()
+                progress_info.info(f"正在从 {normalize_remote_url(config['repo_path'])} 克隆仓库（浅克隆模式）")
+                
+                try:
+                    analyzer = GitAnalyzer(config['repo_path'])
+                    progress_info.success("✅ 远程仓库克隆完成！")
+                    
+                    # 添加浅克隆提示
+                    if hasattr(analyzer, 'temp_dir') and analyzer.temp_dir:
+                        st.info("""
+                        📋 **远程仓库分析说明**：
+                        • 使用浅克隆技术以提高性能
+                        • 如遇到统计数据不完整，属正常现象
+                        • 临时文件将在分析完成后自动清理
+                        """)
+                        
+                except Exception as e:
+                    progress_info.error(f"❌ 克隆失败: {str(e)}")
+                    st.markdown("""
+                    <div class="warning-box">
+                    <strong>💡 可能的解决方案:</strong><br>
+                    1. 检查仓库URL是否正确<br>
+                    2. 确认仓库是公开的或您有访问权限<br>
+                    3. 检查网络连接是否正常<br>
+                    4. 尝试使用完整的GitHub URL格式
+                    </div>
+                    """, unsafe_allow_html=True)
+                    return
         else:
             analyzer = GitAnalyzer(config['repo_path'])
         

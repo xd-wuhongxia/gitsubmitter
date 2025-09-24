@@ -97,14 +97,29 @@ class GitAnalyzer:
         self.temp_dir = tempfile.mkdtemp(prefix="git_analyzer_")
         
         try:
-            # 克隆仓库（浅克隆以提高性能）
-            repo = git.Repo.clone_from(
-                normalized_url,
-                self.temp_dir,
-                depth=100,  # 只克隆最近100个提交
-                single_branch=True  # 只克隆默认分支
-            )
-            return repo
+            # 尝试浅克隆（更深的历史以减少统计错误）
+            try:
+                repo = git.Repo.clone_from(
+                    normalized_url,
+                    self.temp_dir,
+                    depth=500,  # 增加到500个提交以获得更完整的统计
+                    single_branch=True
+                )
+                return repo
+            except git.exc.GitCommandError:
+                # 如果浅克隆失败，尝试完整克隆
+                import shutil
+                if os.path.exists(self.temp_dir):
+                    shutil.rmtree(self.temp_dir)
+                self.temp_dir = tempfile.mkdtemp(prefix="git_analyzer_full_")
+                
+                repo = git.Repo.clone_from(
+                    normalized_url,
+                    self.temp_dir
+                    # 不使用depth参数，进行完整克隆
+                )
+                return repo
+                
         except Exception as e:
             # 清理临时目录
             if os.path.exists(self.temp_dir):
@@ -193,8 +208,18 @@ class GitAnalyzer:
             commits = []
         
         for commit in commits:
-            # 获取提交统计
-            stats = commit.stats.total
+            try:
+                # 获取提交统计 - 对于浅克隆需要特殊处理
+                stats = commit.stats.total
+            except git.exc.GitCommandError as e:
+                # 浅克隆中可能无法访问某些提交的统计信息
+                if "bad object" in str(e) or "fatal:" in str(e):
+                    stats = {'files': 0, 'insertions': 0, 'deletions': 0}
+                else:
+                    raise e
+            except Exception:
+                # 其他统计获取错误，使用默认值
+                stats = {'files': 0, 'insertions': 0, 'deletions': 0}
             
             # 确保日期是datetime对象
             commit_date = commit.committed_datetime
@@ -355,8 +380,16 @@ class GitAnalyzer:
         
         for commit in commits:
             try:
-                # 获取每个提交的文件变更
-                for file_path, stats in commit.stats.files.items():
+                # 获取每个提交的文件变更 - 处理浅克隆问题
+                try:
+                    files_stats = commit.stats.files
+                except git.exc.GitCommandError as e:
+                    if "bad object" in str(e) or "fatal:" in str(e):
+                        continue  # 跳过无法访问的提交
+                    else:
+                        raise e
+                
+                for file_path, stats in files_stats.items():
                     file_changes[file_path]['modifications'] += 1
                     file_changes[file_path]['insertions'] += stats['insertions']
                     file_changes[file_path]['deletions'] += stats['deletions']
@@ -626,8 +659,16 @@ class GitAnalyzer:
                     'message': parent.message.strip()[:30] + '...' if len(parent.message.strip()) > 30 else parent.message.strip()
                 })
             
-            # 计算合并统计
-            stats = commit.stats.total
+            # 计算合并统计 - 处理浅克隆问题
+            try:
+                stats = commit.stats.total
+            except git.exc.GitCommandError as e:
+                if "bad object" in str(e) or "fatal:" in str(e):
+                    stats = {'files': 0, 'insertions': 0, 'deletions': 0}
+                else:
+                    raise e
+            except Exception:
+                stats = {'files': 0, 'insertions': 0, 'deletions': 0}
             
             return {
                 'hash': commit.hexsha[:8],
