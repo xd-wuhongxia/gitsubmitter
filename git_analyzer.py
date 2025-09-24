@@ -21,14 +21,104 @@ class GitAnalyzer:
         初始化Git分析器
         
         Args:
-            repo_path: Git仓库路径
+            repo_path: Git仓库路径或远程URL
         """
+        self.repo_path = repo_path
+        self.is_remote = self._is_remote_url(repo_path)
+        self.temp_dir = None
+        
         try:
-            self.repo = git.Repo(repo_path)
+            if self.is_remote:
+                # 处理远程仓库
+                self.repo = self._handle_remote_repo(repo_path)
+            else:
+                # 处理本地仓库
+                self.repo = git.Repo(repo_path)
         except git.exc.InvalidGitRepositoryError:
             raise ValueError(f"路径 {repo_path} 不是有效的Git仓库")
+        except Exception as e:
+            raise ValueError(f"无法访问仓库 {repo_path}: {str(e)}")
+    
+    def _is_remote_url(self, repo_path: str) -> bool:
+        """判断是否是远程仓库URL"""
+        repo_path = repo_path.strip().lower()
+        remote_patterns = [
+            'http://', 'https://', 'git://', 'ssh://',
+            'git@', '.git', 'github.com', 'gitlab.com', 'bitbucket.org'
+        ]
         
-        self.repo_path = repo_path
+        for pattern in remote_patterns:
+            if pattern in repo_path:
+                return True
+        
+        # 检查简化格式
+        parts = repo_path.split('/')
+        if len(parts) >= 2 and not repo_path.startswith('/') and '.' not in parts[0]:
+            return True
+        
+        return False
+    
+    def _normalize_remote_url(self, repo_input: str) -> str:
+        """标准化远程仓库URL"""
+        repo_input = repo_input.strip()
+        
+        if repo_input.startswith(('http://', 'https://', 'git://', 'ssh://')):
+            return repo_input
+        
+        if repo_input.startswith('git@'):
+            return repo_input
+        
+        if '/' in repo_input:
+            parts = repo_input.split('/')
+            
+            # 处理 m/user/repo 格式
+            if len(parts) == 3 and parts[0] == 'm':
+                user, repo = parts[1], parts[2]
+                repo = repo.replace('.git', '')  # 移除可能存在的.git后缀
+                return f"https://github.com/{user}/{repo}.git"
+            
+            # 处理 user/repo 格式
+            elif len(parts) == 2:
+                user, repo = parts[0], parts[1]
+                repo = repo.replace('.git', '')  # 移除可能存在的.git后缀
+                return f"https://github.com/{user}/{repo}.git"
+        
+        return repo_input
+    
+    def _handle_remote_repo(self, repo_url: str):
+        """处理远程仓库（临时克隆）"""
+        import tempfile
+        import shutil
+        
+        # 标准化URL
+        normalized_url = self._normalize_remote_url(repo_url)
+        
+        # 创建临时目录
+        self.temp_dir = tempfile.mkdtemp(prefix="git_analyzer_")
+        
+        try:
+            # 克隆仓库（浅克隆以提高性能）
+            repo = git.Repo.clone_from(
+                normalized_url,
+                self.temp_dir,
+                depth=100,  # 只克隆最近100个提交
+                single_branch=True  # 只克隆默认分支
+            )
+            return repo
+        except Exception as e:
+            # 清理临时目录
+            if os.path.exists(self.temp_dir):
+                shutil.rmtree(self.temp_dir)
+            raise e
+    
+    def __del__(self):
+        """析构函数，清理临时目录"""
+        if hasattr(self, 'temp_dir') and self.temp_dir and os.path.exists(self.temp_dir):
+            import shutil
+            try:
+                shutil.rmtree(self.temp_dir)
+            except Exception:
+                pass
     
     def get_repo_info(self) -> dict:
         """

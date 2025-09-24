@@ -71,12 +71,80 @@ def load_custom_css():
     """, unsafe_allow_html=True)
 
 
-def validate_git_repo(repo_path: str) -> tuple[bool, str]:
+def is_remote_repo_url(repo_path: str) -> bool:
     """
-    验证Git仓库路径
+    判断是否是远程仓库URL
     
     Args:
-        repo_path: 仓库路径
+        repo_path: 仓库路径或URL
+        
+    Returns:
+        是否是远程URL
+    """
+    repo_path = repo_path.strip().lower()
+    remote_patterns = [
+        'http://', 'https://', 'git://', 'ssh://',
+        'git@', '.git', 'github.com', 'gitlab.com', 'bitbucket.org'
+    ]
+    
+    # 检查是否包含远程仓库的特征
+    for pattern in remote_patterns:
+        if pattern in repo_path:
+            return True
+    
+    # 检查是否是简化的GitHub格式 (如: user/repo 或 m/user/repo)
+    parts = repo_path.split('/')
+    if len(parts) >= 2 and not repo_path.startswith('/') and '.' not in parts[0]:
+        return True
+    
+    return False
+
+
+def normalize_remote_url(repo_input: str) -> str:
+    """
+    标准化远程仓库URL
+    
+    Args:
+        repo_input: 用户输入的仓库地址
+        
+    Returns:
+        标准化的GitHub URL
+    """
+    repo_input = repo_input.strip()
+    
+    # 如果已经是完整的URL，直接返回
+    if repo_input.startswith(('http://', 'https://', 'git://', 'ssh://')):
+        return repo_input
+    
+    # 处理git@格式
+    if repo_input.startswith('git@'):
+        return repo_input
+    
+    # 处理简化格式
+    if '/' in repo_input:
+        parts = repo_input.split('/')
+        
+        # 处理 m/user/repo 格式
+        if len(parts) == 3 and parts[0] == 'm':
+            user, repo = parts[1], parts[2]
+            repo = repo.replace('.git', '')  # 移除可能存在的.git后缀
+            return f"https://github.com/{user}/{repo}.git"
+        
+        # 处理 user/repo 格式
+        elif len(parts) == 2:
+            user, repo = parts[0], parts[1]
+            repo = repo.replace('.git', '')  # 移除可能存在的.git后缀
+            return f"https://github.com/{user}/{repo}.git"
+    
+    return repo_input
+
+
+def validate_git_repo(repo_path: str) -> tuple[bool, str]:
+    """
+    验证Git仓库路径（支持本地和远程）
+    
+    Args:
+        repo_path: 仓库路径或URL
         
     Returns:
         (是否有效, 错误消息)
@@ -87,9 +155,14 @@ def validate_git_repo(repo_path: str) -> tuple[bool, str]:
         
         repo_path = repo_path.strip()
         
+        # 检查是否是远程仓库URL
+        if is_remote_repo_url(repo_path):
+            return True, f"🌐 远程Git仓库: {normalize_remote_url(repo_path)}"
+        
+        # 本地仓库验证逻辑
         # 检查路径是否存在
         if not os.path.exists(repo_path):
-            return False, f"路径不存在: {repo_path}"
+            return False, f"本地路径不存在: {repo_path}"
         
         # 检查是否是目录
         if not os.path.isdir(repo_path):
@@ -98,7 +171,7 @@ def validate_git_repo(repo_path: str) -> tuple[bool, str]:
         # 检查是否是Git仓库
         try:
             test_repo = git.Repo(repo_path)
-            return True, "✅ 有效的Git仓库"
+            return True, "✅ 本地Git仓库"
         except git.exc.InvalidGitRepositoryError:
             return False, f"不是有效的Git仓库: {repo_path}"
         except Exception as e:
@@ -164,11 +237,20 @@ def sidebar_controls():
     
     if input_method == "📝 手动输入":
         repo_path = st.sidebar.text_input(
-            "Git仓库路径",
+            "Git仓库路径或URL",
             value=".",
-            help="输入Git仓库的绝对或相对路径",
-            placeholder="例如: . 或 /path/to/repo 或 C:\\path\\to\\repo"
+            help="支持本地路径和远程仓库URL",
+            placeholder="本地: . 或 /path/to/repo\n远程: user/repo 或 https://github.com/user/repo.git"
         )
+        
+        st.sidebar.markdown("""
+        <div style="font-size: 0.8em; color: #666; margin-top: 5px;">
+        <strong>支持格式:</strong><br>
+        • 本地路径: <code>.</code> 或 <code>/path/to/repo</code><br>
+        • GitHub简化: <code>user/repo</code><br>
+        • 完整URL: <code>https://github.com/user/repo.git</code>
+        </div>
+        """, unsafe_allow_html=True)
     
     elif input_method == "📋 最近使用":
         recent_repos = get_recent_repos()
@@ -204,29 +286,41 @@ def sidebar_controls():
     
     # 显示仓库信息预览
     if is_valid:
-        try:
-            preview_analyzer = GitAnalyzer(repo_path)
-            repo_info = preview_analyzer.get_repo_info()
-            
-            st.sidebar.markdown("#### 📊 仓库预览")
-            st.sidebar.markdown(f"**路径**: `{repo_info['path']}`")
-            st.sidebar.markdown(f"**当前分支**: `{repo_info['current_branch']}`")
-            st.sidebar.markdown(f"**分支总数**: {repo_info['total_branches']}")
-            
-            if repo_info['remote_urls']:
-                st.sidebar.markdown("**Remote URLs**:")
-                for remote in repo_info['remote_urls'][:2]:  # 最多显示2个
-                    url_display = remote['url']
-                    if len(url_display) > 30:
-                        url_display = url_display[:27] + "..."
-                    st.sidebar.markdown(f"• `{remote['name']}`: {url_display}")
-                if len(repo_info['remote_urls']) > 2:
-                    st.sidebar.markdown(f"• ... 还有 {len(repo_info['remote_urls']) - 2} 个")
-            else:
-                st.sidebar.markdown("**Remote URLs**: 无")
+        if is_remote_repo_url(repo_path):
+            # 远程仓库预览
+            st.sidebar.markdown("#### 🌐 远程仓库预览")
+            normalized_url = normalize_remote_url(repo_path)
+            st.sidebar.markdown(f"**仓库URL**: `{normalized_url}`")
+            st.sidebar.info("💡 远程仓库将在分析时临时克隆")
+            st.sidebar.markdown("**克隆设置**:")
+            st.sidebar.markdown("• 深度: 最近100个提交")
+            st.sidebar.markdown("• 分支: 默认分支")
+            st.sidebar.markdown("• 模式: 浅克隆（快速）")
+        else:
+            # 本地仓库预览
+            try:
+                preview_analyzer = GitAnalyzer(repo_path)
+                repo_info = preview_analyzer.get_repo_info()
                 
-        except Exception as e:
-            st.sidebar.warning(f"获取仓库预览失败: {str(e)}")
+                st.sidebar.markdown("#### 📊 本地仓库预览")
+                st.sidebar.markdown(f"**路径**: `{repo_info['path']}`")
+                st.sidebar.markdown(f"**当前分支**: `{repo_info['current_branch']}`")
+                st.sidebar.markdown(f"**分支总数**: {repo_info['total_branches']}")
+                
+                if repo_info['remote_urls']:
+                    st.sidebar.markdown("**Remote URLs**:")
+                    for remote in repo_info['remote_urls'][:2]:  # 最多显示2个
+                        url_display = remote['url']
+                        if len(url_display) > 30:
+                            url_display = url_display[:27] + "..."
+                        st.sidebar.markdown(f"• `{remote['name']}`: {url_display}")
+                    if len(repo_info['remote_urls']) > 2:
+                        st.sidebar.markdown(f"• ... 还有 {len(repo_info['remote_urls']) - 2} 个")
+                else:
+                    st.sidebar.markdown("**Remote URLs**: 无")
+                    
+            except Exception as e:
+                st.sidebar.warning(f"获取仓库预览失败: {str(e)}")
     
     # 快速操作按钮
     col1, col2 = st.sidebar.columns(2)
@@ -697,7 +791,15 @@ def main():
         # 添加到最近使用列表
         add_to_recent_repos(config['repo_path'])
         
-        analyzer = GitAnalyzer(config['repo_path'])
+        # 检查是否是远程仓库，显示加载进度
+        if is_remote_repo_url(config['repo_path']):
+            with st.spinner('🌐 正在克隆远程仓库，请稍候...'):
+                st.info(f"正在从 {normalize_remote_url(config['repo_path'])} 克隆仓库")
+                analyzer = GitAnalyzer(config['repo_path'])
+                st.success("✅ 远程仓库克隆完成！")
+        else:
+            analyzer = GitAnalyzer(config['repo_path'])
+        
         visualizer = GitVisualizer()
         
         # 获取并显示仓库信息
