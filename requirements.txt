@@ -7,3 +7,5 @@ altair>=5.1.0
 seaborn>=0.12.0
 matplotlib>=3.8.0
 python-dateutil>=2.8.0
+PyGithub>=1.59.0
+requests>=2.31.0

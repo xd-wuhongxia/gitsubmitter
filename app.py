@@ -13,6 +13,8 @@ import git
 # 导入自定义模块
 from git_analyzer import GitAnalyzer
 from visualizations import GitVisualizer
+from mr_database import MRDatabase
+from github_integration import GitHubIntegration
 
 
 def init_page_config():
@@ -896,10 +898,10 @@ def main():
             )
         
         # 创建选项卡
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-            "📝 提交分析", "👥 作者分析", "⏰ 时间分析", 
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+            "📝 提交分析", "👥 作者分析", "⏰时间分析", 
             "🔀 合并分析", "📁 文件分析", "🌳 分支分析",
-            "🌐 分支关系图", "🔀 合并方向历史"
+            "🌐 分支关系图", "🔀 合并方向历史", "🔄 MR管理"
         ])
         
         with tab1:
@@ -925,6 +927,9 @@ def main():
         
         with tab8:
             display_merge_direction_analysis(analyzer, visualizer)
+        
+        with tab9:
+            display_mr_management(analyzer, config)
             
     except ValueError as e:
         st.error(f"❌ {str(e)}")
@@ -947,6 +952,313 @@ def main():
         3. 查看控制台获取详细错误信息
         </div>
         """, unsafe_allow_html=True)
+
+
+def display_mr_management(analyzer, config):
+    """显示MR管理页面"""
+    st.markdown("### 🔄 Merge Request 管理")
+    
+    # GitHub配置检查
+    github_token = st.session_state.get('github_token')
+    
+    if not github_token:
+        st.info("🔑 请先配置GitHub访问令牌以使用MR管理功能")
+        
+        with st.expander("⚙️ GitHub配置", expanded=True):
+            st.markdown("""
+            **获取GitHub Personal Access Token:**
+            1. 访问 [GitHub Settings > Personal access tokens](https://github.com/settings/tokens)
+            2. 点击 "Generate new token (classic)"
+            3. 选择适当的权限范围 (至少需要 `repo` 权限)
+            4. 复制生成的token
+            """)
+            
+            token_input = st.text_input(
+                "GitHub Access Token",
+                type="password",
+                help="输入您的GitHub Personal Access Token"
+            )
+            
+            if st.button("保存配置"):
+                if token_input:
+                    st.session_state['github_token'] = token_input
+                    st.success("✅ GitHub配置已保存！")
+                    st.rerun()
+                else:
+                    st.error("请输入有效的token")
+        return
+    
+    # 初始化GitHub集成
+    try:
+        github_client = GitHubIntegration(github_token)
+        success, message = github_client.test_connection()
+        
+        if not success:
+            st.error(f"❌ GitHub连接失败: {message}")
+            if st.button("重新配置"):
+                del st.session_state['github_token']
+                st.rerun()
+            return
+        
+        st.success(f"✅ GitHub连接成功: {message}")
+        
+    except Exception as e:
+        st.error(f"❌ GitHub集成初始化失败: {str(e)}")
+        return
+    
+    # 仓库选择和配置
+    st.markdown("#### 📁 仓库设置")
+    
+    col1, col2, col3 = st.columns([2, 1, 1])
+    
+    with col1:
+        repo_input = st.text_input(
+            "GitHub仓库",
+            value="",
+            placeholder="例如: owner/repo 或 https://github.com/owner/repo",
+            help="输入要管理的GitHub仓库"
+        )
+    
+    with col2:
+        days_range = st.number_input(
+            "时间范围（天）",
+            min_value=1,
+            max_value=90,
+            value=30,
+            help="获取最近多少天的PR"
+        )
+    
+    with col3:
+        pr_state = st.selectbox(
+            "PR状态",
+            options=["all", "open", "closed"],
+            index=0,
+            help="筛选PR状态"
+        )
+    
+    if not repo_input:
+        st.info("💡 请输入要管理的GitHub仓库地址")
+        return
+    
+    # 获取PR数据
+    if st.button("🔄 刷新PR数据") or 'mr_data' not in st.session_state:
+        with st.spinner("📥 正在获取PR数据..."):
+            try:
+                # 获取仓库信息
+                repo_info = github_client.get_repository_info(repo_input)
+                st.session_state['current_repo_info'] = repo_info
+                
+                # 获取PR列表
+                prs = github_client.get_pull_requests(repo_input, days=days_range, state=pr_state)
+                st.session_state['mr_data'] = prs
+                
+                # 初始化数据库
+                db = MRDatabase()
+                
+                # 存储PR数据到数据库
+                for pr in prs:
+                    pr_id = db.insert_or_update_pr(pr)
+                    
+                    # 获取PR评论以查找pr-agent结果
+                    comments = github_client.get_pr_comments(repo_input, pr['pr_number'])
+                    pr_agent_reviews = github_client.find_pr_agent_reviews(comments)
+                    
+                    # 存储review结果
+                    for review in pr_agent_reviews:
+                        db.insert_review_result(pr_id, review)
+                
+                st.success(f"✅ 成功获取 {len(prs)} 个PR的数据")
+                
+            except Exception as e:
+                st.error(f"❌ 获取PR数据失败: {str(e)}")
+                return
+    
+    # 显示仓库信息
+    if 'current_repo_info' in st.session_state:
+        repo_info = st.session_state['current_repo_info']
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("⭐ Stars", repo_info.get('stars', 0))
+        with col2:
+            st.metric("🍴 Forks", repo_info.get('forks', 0))
+        with col3:
+            st.metric("🐛 Issues", repo_info.get('open_issues', 0))
+        with col4:
+            st.metric("📝 PRs", len(st.session_state.get('mr_data', [])))
+    
+    # 显示PR列表
+    if 'mr_data' in st.session_state and st.session_state['mr_data']:
+        st.markdown("#### 📋 Pull Request 列表")
+        
+        # 创建PR数据表格
+        mr_data = st.session_state['mr_data']
+        
+        # 准备表格数据
+        table_data = []
+        for pr in mr_data:
+            # 获取数据库中的review结果
+            db = MRDatabase()
+            pr_details = db.get_pr_details(pr.get('id', 0))
+            
+            review_score = "N/A"
+            security_issues = 0
+            code_issues = 0
+            risk_level = "Unknown"
+            
+            if pr_details and pr_details.get('reviews'):
+                latest_review = pr_details['reviews'][0]  # 最新的review
+                review_score = f"{latest_review.get('score', 0):.1f}/10" if latest_review.get('score') else "N/A"
+                security_issues = latest_review.get('security_issues', 0)
+                code_issues = latest_review.get('code_issues', 0)
+                risk_level = latest_review.get('risk_level', 'Unknown').title()
+            
+            table_data.append({
+                'PR#': pr['pr_number'],
+                '标题': pr['title'][:50] + '...' if len(pr['title']) > 50 else pr['title'],
+                '作者': pr['author'],
+                '状态': pr['status'],
+                '创建时间': pr['created_at'][:10],
+                'Review评分': review_score,
+                '安全问题': security_issues,
+                '代码问题': code_issues,
+                '风险等级': risk_level,
+                'URL': pr['pr_url']
+            })
+        
+        # 显示表格
+        if table_data:
+            df = pd.DataFrame(table_data)
+            
+            # 使用颜色标记风险等级
+            def highlight_risk(val):
+                if val == 'Critical':
+                    return 'background-color: #ffebee; color: #c62828'
+                elif val == 'High':
+                    return 'background-color: #fff3e0; color: #ef6c00'
+                elif val == 'Medium':
+                    return 'background-color: #f3e5f5; color: #7b1fa2'
+                elif val == 'Low':
+                    return 'background-color: #e8f5e8; color: #2e7d32'
+                return ''
+            
+            styled_df = df.style.applymap(highlight_risk, subset=['风险等级'])
+            
+            st.dataframe(
+                styled_df,
+                width='stretch',
+                height=400,
+                use_container_width=True
+            )
+            
+            # PR详情和操作
+            st.markdown("#### 🔍 PR详细操作")
+            
+            selected_pr_num = st.selectbox(
+                "选择要操作的PR",
+                options=[pr['pr_number'] for pr in mr_data],
+                format_func=lambda x: f"#{x} - {next(pr['title'] for pr in mr_data if pr['pr_number'] == x)[:30]}..."
+            )
+            
+            if selected_pr_num:
+                selected_pr = next(pr for pr in mr_data if pr['pr_number'] == selected_pr_num)
+                
+                with st.expander(f"📄 PR #{selected_pr_num} 详细信息", expanded=True):
+                    col1, col2 = st.columns([2, 1])
+                    
+                    with col1:
+                        st.markdown(f"**标题:** {selected_pr['title']}")
+                        st.markdown(f"**作者:** {selected_pr['author']}")
+                        st.markdown(f"**分支:** `{selected_pr['head_branch']}` → `{selected_pr['base_branch']}`")
+                        st.markdown(f"**状态:** {selected_pr['status']}")
+                        st.markdown(f"**创建时间:** {selected_pr['created_at']}")
+                        
+                        if selected_pr.get('description'):
+                            st.markdown("**描述:**")
+                            st.markdown(selected_pr['description'][:500] + '...' if len(selected_pr['description']) > 500 else selected_pr['description'])
+                    
+                    with col2:
+                        st.markdown("**统计信息:**")
+                        st.metric("➕ 新增行", selected_pr.get('additions', 0))
+                        st.metric("➖ 删除行", selected_pr.get('deletions', 0))
+                        st.metric("📁 变更文件", selected_pr.get('changed_files', 0))
+                
+                # 操作按钮
+                if selected_pr['status'] == 'open':
+                    col1, col2, col3 = st.columns([1, 1, 2])
+                    
+                    with col1:
+                        if st.button("✅ Approve", type="primary"):
+                            # 记录approve操作
+                            db = MRDatabase()
+                            # 这里需要获取PR的数据库ID
+                            pr_id = db.insert_or_update_pr(selected_pr)
+                            db.record_operation(
+                                pr_id, 
+                                'approve', 
+                                st.session_state.get('user_name', 'Unknown User'),
+                                f"通过Streamlit界面批准PR #{selected_pr_num}"
+                            )
+                            st.success(f"✅ 已批准PR #{selected_pr_num}")
+                    
+                    with col2:
+                        if st.button("❌ Reject", type="secondary"):
+                            # 记录reject操作
+                            db = MRDatabase()
+                            pr_id = db.insert_or_update_pr(selected_pr)
+                            db.record_operation(
+                                pr_id,
+                                'reject',
+                                st.session_state.get('user_name', 'Unknown User'),
+                                f"通过Streamlit界面拒绝PR #{selected_pr_num}"
+                            )
+                            st.error(f"❌ 已拒绝PR #{selected_pr_num}")
+                    
+                    with col3:
+                        comment = st.text_input("添加评论", placeholder="可选：添加操作备注")
+                        if st.button("💬 添加评论"):
+                            if comment:
+                                db = MRDatabase()
+                                pr_id = db.insert_or_update_pr(selected_pr)
+                                db.record_operation(
+                                    pr_id,
+                                    'comment',
+                                    st.session_state.get('user_name', 'Unknown User'),
+                                    comment
+                                )
+                                st.info(f"💬 已添加评论到PR #{selected_pr_num}")
+                else:
+                    st.info(f"ℹ️ PR #{selected_pr_num} 状态为 {selected_pr['status']}，无法进行approve/reject操作")
+        else:
+            st.info("📭 暂无PR数据")
+    
+    # 操作历史
+    st.markdown("#### 📜 操作历史")
+    
+    if st.button("🔄 刷新操作历史"):
+        db = MRDatabase()
+        operation_history = db.get_operation_history(limit=20)
+        st.session_state['operation_history'] = operation_history
+    
+    if 'operation_history' in st.session_state:
+        history = st.session_state['operation_history']
+        
+        if history:
+            history_df = pd.DataFrame(history)
+            history_df['operation_time'] = pd.to_datetime(history_df['operation_time']).dt.strftime('%Y-%m-%d %H:%M')
+            
+            st.dataframe(
+                history_df[['operation_time', 'operation', 'operator', 'pr_title', 'comments']].rename(columns={
+                    'operation_time': '操作时间',
+                    'operation': '操作类型',
+                    'operator': '操作人',
+                    'pr_title': 'PR标题',
+                    'comments': '备注'
+                }),
+                width='stretch'
+            )
+        else:
+            st.info("📭 暂无操作历史")
 
 
 if __name__ == "__main__":
