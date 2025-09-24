@@ -372,3 +372,213 @@ class GitAnalyzer:
         ]
         
         return time_stats.reset_index()
+    
+    def get_branch_graph_data(self) -> dict:
+        """
+        获取分支关系图数据
+        
+        Returns:
+            包含分支关系图信息的字典
+        """
+        graph_data = {
+            'nodes': [],
+            'edges': [],
+            'commits': [],
+            'branches': []
+        }
+        
+        try:
+            # 获取所有分支
+            branches = list(self.repo.branches)
+            
+            # 获取所有提交及其分支关系
+            commit_branch_map = {}
+            
+            for branch in branches:
+                try:
+                    commits = list(self.repo.iter_commits(branch, max_count=50))
+                    for commit in commits:
+                        if commit.hexsha not in commit_branch_map:
+                            commit_branch_map[commit.hexsha] = []
+                        commit_branch_map[commit.hexsha].append(branch.name)
+                except Exception:
+                    continue
+            
+            # 构建节点数据
+            for commit_hash, branch_names in commit_branch_map.items():
+                try:
+                    commit = self.repo.commit(commit_hash)
+                    
+                    # 确保日期是datetime对象
+                    commit_date = commit.committed_datetime
+                    if hasattr(commit_date, 'replace'):
+                        commit_date = commit_date.replace(tzinfo=None)
+                    
+                    graph_data['commits'].append({
+                        'hash': commit.hexsha[:8],
+                        'full_hash': commit.hexsha,
+                        'author': commit.author.name,
+                        'date': commit_date,
+                        'message': commit.message.strip()[:50] + '...' if len(commit.message.strip()) > 50 else commit.message.strip(),
+                        'branches': branch_names,
+                        'parents': [p.hexsha for p in commit.parents],
+                        'is_merge': len(commit.parents) > 1
+                    })
+                except Exception:
+                    continue
+            
+            # 按时间排序提交
+            graph_data['commits'].sort(key=lambda x: x['date'], reverse=True)
+            
+            # 构建边数据（父子关系）
+            for commit in graph_data['commits']:
+                for parent_hash in commit['parents']:
+                    graph_data['edges'].append({
+                        'source': parent_hash[:8],
+                        'target': commit['hash'],
+                        'type': 'parent_child'
+                    })
+            
+            # 分支信息
+            for branch in branches:
+                try:
+                    last_commit = branch.commit
+                    commit_count = len(list(self.repo.iter_commits(branch, max_count=100)))
+                    
+                    graph_data['branches'].append({
+                        'name': branch.name,
+                        'last_commit': last_commit.hexsha[:8],
+                        'commits_count': commit_count,
+                        'is_active': branch == self.repo.active_branch
+                    })
+                except Exception:
+                    continue
+                    
+        except Exception:
+            pass
+        
+        return graph_data
+    
+    def get_merge_direction_history(self) -> pd.DataFrame:
+        """
+        获取合并方向历史
+        
+        Returns:
+            包含合并方向历史的DataFrame
+        """
+        merge_history = []
+        
+        try:
+            # 获取所有合并提交
+            commits = list(self.repo.iter_commits("HEAD", max_count=200))
+            
+            for commit in commits:
+                if len(commit.parents) > 1:  # 合并提交
+                    try:
+                        # 分析合并信息
+                        merge_info = self._analyze_merge_commit(commit)
+                        if merge_info:
+                            merge_history.append(merge_info)
+                    except Exception:
+                        continue
+                        
+        except Exception:
+            pass
+        
+        return pd.DataFrame(merge_history)
+    
+    def _analyze_merge_commit(self, commit) -> dict:
+        """
+        分析合并提交的详细信息
+        
+        Args:
+            commit: Git提交对象
+            
+        Returns:
+            合并信息字典
+        """
+        try:
+            # 确保日期是datetime对象
+            commit_date = commit.committed_datetime
+            if hasattr(commit_date, 'replace'):
+                commit_date = commit_date.replace(tzinfo=None)
+            
+            # 解析合并消息
+            message = commit.message.strip()
+            source_branch = "unknown"
+            target_branch = "unknown"
+            
+            # 尝试从提交消息中提取分支信息
+            merge_patterns = [
+                r"Merge branch '([^']+)' into ([^\s]+)",
+                r"Merge branch '([^']+)'",
+                r"Merge pull request #\d+ from ([^\s]+)",
+                r"Merge ([^\s]+) into ([^\s]+)"
+            ]
+            
+            for pattern in merge_patterns:
+                match = re.search(pattern, message, re.IGNORECASE)
+                if match:
+                    if len(match.groups()) >= 2:
+                        source_branch = match.group(1)
+                        target_branch = match.group(2)
+                    else:
+                        source_branch = match.group(1)
+                        target_branch = "main"  # 默认目标分支
+                    break
+            
+            # 获取父提交信息
+            parents_info = []
+            for i, parent in enumerate(commit.parents):
+                parents_info.append({
+                    'hash': parent.hexsha[:8],
+                    'author': parent.author.name,
+                    'message': parent.message.strip()[:30] + '...' if len(parent.message.strip()) > 30 else parent.message.strip()
+                })
+            
+            # 计算合并统计
+            stats = commit.stats.total
+            
+            return {
+                'hash': commit.hexsha[:8],
+                'full_hash': commit.hexsha,
+                'author': commit.author.name,
+                'date': commit_date,
+                'message': message[:100] + '...' if len(message) > 100 else message,
+                'source_branch': source_branch,
+                'target_branch': target_branch,
+                'parents_count': len(commit.parents),
+                'parents_info': parents_info,
+                'files_changed': stats['files'],
+                'insertions': stats['insertions'],
+                'deletions': stats['deletions'],
+                'merge_type': self._classify_merge_type(message)
+            }
+            
+        except Exception:
+            return None
+    
+    def _classify_merge_type(self, message: str) -> str:
+        """
+        分类合并类型
+        
+        Args:
+            message: 提交消息
+            
+        Returns:
+            合并类型
+        """
+        message_lower = message.lower()
+        
+        if 'pull request' in message_lower or 'pr' in message_lower:
+            return 'Pull Request'
+        elif 'feature' in message_lower:
+            return 'Feature Branch'
+        elif 'hotfix' in message_lower or 'fix' in message_lower:
+            return 'Hotfix'
+        elif 'release' in message_lower:
+            return 'Release Branch'
+        elif 'develop' in message_lower:
+            return 'Development Branch'
+        else:
+            return 'Regular Merge'

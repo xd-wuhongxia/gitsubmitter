@@ -355,6 +355,134 @@ def display_branch_analysis(analyzer: GitAnalyzer, visualizer: GitVisualizer):
         st.error(f"分支分析出错: {str(e)}")
 
 
+def display_branch_graph_analysis(analyzer: GitAnalyzer, visualizer: GitVisualizer):
+    """显示分支关系图分析"""
+    st.markdown("## 🌐 分支关系图")
+    
+    try:
+        # 获取分支关系图数据
+        graph_data = analyzer.get_branch_graph_data()
+        
+        if not graph_data['commits']:
+            st.warning("暂无分支关系数据")
+            return
+        
+        # 显示概览统计
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("📊 提交节点", len(graph_data['commits']))
+        
+        with col2:
+            st.metric("🔗 关系连接", len(graph_data['edges']))
+        
+        with col3:
+            merge_commits = sum(1 for commit in graph_data['commits'] if commit['is_merge'])
+            st.metric("🔀 合并提交", merge_commits)
+        
+        with col4:
+            st.metric("🌿 分支数量", len(graph_data['branches']))
+        
+        # 分支网络关系图
+        st.markdown("### 分支网络关系图")
+        st.markdown("""
+        <div class="info-box">
+        💡 <strong>图表说明:</strong><br>
+        • 🔵 圆形节点 = 普通提交<br>
+        • 💎 菱形节点 = 合并提交<br>
+        • 不同颜色 = 不同分支<br>
+        • 连线显示提交的父子关系
+        </div>
+        """, unsafe_allow_html=True)
+        
+        network_fig = visualizer.plot_branch_network_graph(graph_data)
+        st.plotly_chart(network_fig, width='stretch')
+        
+        # 分支提交详情
+        st.markdown("### 最近提交节点")
+        commits_df = pd.DataFrame(graph_data['commits'][:20])
+        if not commits_df.empty:
+            display_commits = commits_df[['hash', 'author', 'date', 'message', 'branches', 'is_merge']].copy()
+            display_commits['date'] = pd.to_datetime(display_commits['date']).dt.strftime('%Y-%m-%d %H:%M')
+            display_commits['branches'] = display_commits['branches'].apply(lambda x: ', '.join(x))
+            display_commits['type'] = display_commits['is_merge'].apply(lambda x: '🔀 合并' if x else '📝 普通')
+            display_commits = display_commits.drop('is_merge', axis=1)
+            st.dataframe(display_commits, width='stretch')
+        
+    except Exception as e:
+        st.error(f"分支关系图分析出错: {str(e)}")
+
+
+def display_merge_direction_analysis(analyzer: GitAnalyzer, visualizer: GitVisualizer):
+    """显示合并方向历史分析"""
+    st.markdown("## 🔀 合并方向历史")
+    
+    try:
+        # 获取合并历史数据
+        merge_history = analyzer.get_merge_direction_history()
+        
+        if merge_history.empty:
+            st.info("在当前仓库中未发现合并提交")
+            return
+        
+        # 显示合并概览统计
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("🔀 总合并次数", len(merge_history))
+        
+        with col2:
+            unique_authors = merge_history['author'].nunique()
+            st.metric("👥 参与作者数", unique_authors)
+        
+        with col3:
+            unique_branches = len(set(merge_history['source_branch'].tolist() + merge_history['target_branch'].tolist()))
+            st.metric("🌿 涉及分支数", unique_branches)
+        
+        with col4:
+            avg_files = int(merge_history['files_changed'].mean()) if not merge_history.empty else 0
+            st.metric("📁 平均文件变更", avg_files)
+        
+        # 合并方向流程图
+        st.markdown("### 分支合并流向图")
+        st.markdown("""
+        <div class="info-box">
+        💡 <strong>桑基图说明:</strong> 显示分支间的合并流向和频率，线条粗细代表合并次数
+        </div>
+        """, unsafe_allow_html=True)
+        
+        flow_fig = visualizer.plot_merge_direction_flow(merge_history)
+        st.plotly_chart(flow_fig, width='stretch')
+        
+        # 合并时间线
+        st.markdown("### 合并历史时间线")
+        timeline_fig = visualizer.plot_merge_timeline(merge_history)
+        st.plotly_chart(timeline_fig, width='stretch')
+        
+        # 合并统计总览
+        st.markdown("### 合并统计总览")
+        stats_fig = visualizer.plot_merge_statistics(merge_history)
+        st.plotly_chart(stats_fig, width='stretch')
+        
+        # 最近合并详情
+        st.markdown("### 最近合并记录")
+        recent_merges = merge_history.head(15).copy()
+        if not recent_merges.empty:
+            display_merges = recent_merges[[
+                'hash', 'author', 'date', 'source_branch', 'target_branch', 
+                'merge_type', 'files_changed', 'insertions', 'deletions'
+            ]].copy()
+            display_merges['date'] = display_merges['date'].dt.strftime('%Y-%m-%d %H:%M')
+            display_merges['code_changes'] = display_merges.apply(
+                lambda row: f"+{row['insertions']} -{row['deletions']}", axis=1
+            )
+            display_merges = display_merges.drop(['insertions', 'deletions'], axis=1)
+            st.dataframe(display_merges, width='stretch')
+        
+    except Exception as e:
+        st.error(f"合并方向分析出错: {str(e)}")
+
+
 def main():
     """主函数"""
     # 初始化页面
@@ -401,9 +529,10 @@ def main():
         commits_df, author_stats = display_overview_metrics(analyzer, config)
         
         # 创建选项卡
-        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
             "📝 提交分析", "👥 作者分析", "⏰ 时间分析", 
-            "🔀 合并分析", "📁 文件分析", "🌳 分支分析"
+            "🔀 合并分析", "📁 文件分析", "🌳 分支分析",
+            "🌐 分支关系图", "🔀 合并方向历史"
         ])
         
         with tab1:
@@ -423,6 +552,12 @@ def main():
         
         with tab6:
             display_branch_analysis(analyzer, visualizer)
+        
+        with tab7:
+            display_branch_graph_analysis(analyzer, visualizer)
+        
+        with tab8:
+            display_merge_direction_analysis(analyzer, visualizer)
             
     except ValueError as e:
         st.error(f"❌ {str(e)}")

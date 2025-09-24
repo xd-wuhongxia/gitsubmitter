@@ -79,6 +79,29 @@ def main():
                 status = "🟢 当前" if branch['is_active'] else "⭕ 其他"
                 print(f"   {status} {branch['branch_name']}: {branch['commits_count']} 提交")
         
+        # 分支关系图信息
+        graph_data = analyzer.get_branch_graph_data()
+        if graph_data['commits']:
+            print(f"\n🌐 分支关系图:")
+            print(f"   📊 提交节点: {len(graph_data['commits'])}")
+            print(f"   🔗 关系连接: {len(graph_data['edges'])}")
+            merge_commits = sum(1 for commit in graph_data['commits'] if commit['is_merge'])
+            print(f"   🔀 合并提交: {merge_commits}")
+        
+        # 合并方向历史
+        merge_history = analyzer.get_merge_direction_history()
+        if not merge_history.empty:
+            print(f"\n🔀 合并方向历史:")
+            print(f"   🔀 总合并次数: {len(merge_history)}")
+            unique_authors = merge_history['author'].nunique()
+            print(f"   👥 参与作者数: {unique_authors}")
+            
+            # 显示合并类型分布
+            merge_types = merge_history['merge_type'].value_counts()
+            print(f"   📋 合并类型:")
+            for merge_type, count in merge_types.items():
+                print(f"      • {merge_type}: {count} 次")
+        
     except Exception as e:
         print(f"❌ 分析过程中出错: {e}")
         return
