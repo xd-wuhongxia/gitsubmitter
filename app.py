@@ -15,6 +15,7 @@ from git_analyzer import GitAnalyzer
 from visualizations import GitVisualizer
 from mr_database import MRDatabase
 from github_integration import GitHubIntegration
+from repo_history import RepoHistoryManager
 
 
 def init_page_config():
@@ -183,44 +184,31 @@ def validate_git_repo(repo_path: str) -> tuple[bool, str]:
         return False, f"验证路径时出错: {str(e)}"
 
 
+def get_repo_history_manager() -> RepoHistoryManager:
+    """获取仓库历史管理器实例"""
+    if 'repo_history_manager' not in st.session_state:
+        st.session_state.repo_history_manager = RepoHistoryManager()
+    return st.session_state.repo_history_manager
+
+
 def get_recent_repos() -> list:
     """获取最近使用的仓库列表"""
-    # 从session state中获取最近使用的仓库
-    if 'recent_repos' not in st.session_state:
-        st.session_state.recent_repos = [
-            ".",
-            "..",
-        ]
+    history_manager = get_repo_history_manager()
+    recent_repos = history_manager.get_recent_repos()
     
-    # 添加一些常见路径（如果不存在）
-    common_paths = [
-        os.path.expanduser("~"),
-        "D:/",
-        "C:/",
-    ]
+    # 如果没有历史记录，添加一些默认选项
+    if not recent_repos:
+        # 添加当前目录作为默认选项
+        history_manager.add_repo(".")
+        recent_repos = history_manager.get_recent_repos()
     
-    recent_list = st.session_state.recent_repos.copy()
-    for path in common_paths:
-        if path not in recent_list and os.path.exists(path):
-            recent_list.append(path)
-    
-    return recent_list[:10]  # 最多显示10个
+    return [repo["path"] for repo in recent_repos]
 
 
 def add_to_recent_repos(repo_path: str):
     """添加仓库到最近使用列表"""
-    if 'recent_repos' not in st.session_state:
-        st.session_state.recent_repos = []
-    
-    # 移除已存在的相同路径
-    if repo_path in st.session_state.recent_repos:
-        st.session_state.recent_repos.remove(repo_path)
-    
-    # 添加到列表开头
-    st.session_state.recent_repos.insert(0, repo_path)
-    
-    # 保持列表长度不超过10
-    st.session_state.recent_repos = st.session_state.recent_repos[:10]
+    history_manager = get_repo_history_manager()
+    history_manager.add_repo(repo_path)
 
 
 def sidebar_controls():
@@ -255,12 +243,58 @@ def sidebar_controls():
         """, unsafe_allow_html=True)
     
     elif input_method == "📋 最近使用":
-        recent_repos = get_recent_repos()
-        repo_path = st.sidebar.selectbox(
-            "选择最近使用的仓库",
-            recent_repos,
-            help="从最近使用的仓库中选择"
-        )
+        history_manager = get_repo_history_manager()
+        recent_repos = history_manager.get_recent_repos()
+        
+        if recent_repos:
+            # 创建显示选项
+            display_options = []
+            repo_paths = []
+            
+            for repo in recent_repos:
+                display_name = history_manager.format_repo_display(repo)
+                display_options.append(display_name)
+                repo_paths.append(repo["path"])
+            
+            # 显示统计信息
+            stats = history_manager.get_stats()
+            st.sidebar.markdown(f"""
+            <div style="font-size: 0.8em; color: #666; margin-bottom: 10px;">
+            📊 共 {stats['total']} 个仓库 (📁 {stats['local']} 本地 + 🌐 {stats['remote']} 远程)
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # 选择框
+            selected_index = st.sidebar.selectbox(
+                "选择最近使用的仓库",
+                range(len(display_options)),
+                format_func=lambda i: display_options[i],
+                help="从最近使用的仓库中选择"
+            )
+            
+            repo_path = repo_paths[selected_index]
+            
+            # 管理按钮
+            col1, col2 = st.sidebar.columns(2)
+            with col1:
+                if st.button("🗑️ 删除", key="remove_repo", help="删除选中的仓库记录"):
+                    if history_manager.remove_repo(repo_path):
+                        st.success("✅ 已删除仓库记录")
+                        st.rerun()
+                    else:
+                        st.error("❌ 删除失败")
+            
+            with col2:
+                if st.button("🧹 清空", key="clear_history", help="清空所有仓库历史"):
+                    if history_manager.clear_history():
+                        st.success("✅ 已清空历史记录")
+                        st.rerun()
+                    else:
+                        st.error("❌ 清空失败")
+        else:
+            st.sidebar.info("📭 暂无最近使用的仓库")
+            st.sidebar.markdown("💡 使用其他方式选择仓库后，会自动添加到历史记录中")
+            repo_path = "."
     
     elif input_method == "📂 浏览选择":
         st.sidebar.info("💡 在下方输入框中输入要分析的仓库路径")
@@ -326,14 +360,9 @@ def sidebar_controls():
                 st.sidebar.warning(f"获取仓库预览失败: {str(e)}")
     
     # 快速操作按钮
-    col1, col2 = st.sidebar.columns(2)
-    with col1:
-        if st.button("🔄 刷新", help="重新加载当前仓库数据"):
-            st.rerun()
-    with col2:
-        if st.button("🗑️ 清除历史", help="清除最近使用的仓库历史"):
-            st.session_state.recent_repos = []
-            st.rerun()
+    # 刷新按钮
+    if st.sidebar.button("🔄 刷新", help="重新加载当前仓库数据"):
+        st.rerun()
     
     st.sidebar.markdown("---")
     st.sidebar.markdown("### ⚙️ 分析配置")
@@ -1095,15 +1124,59 @@ Token前缀: {github_token[:10] + '...' if github_token and len(github_token) > 
     # 仓库选择和配置
     st.markdown("#### 📁 仓库设置")
     
-    col1, col2, col3 = st.columns([2, 1, 1])
+    # 仓库输入方式选择
+    col_method, col_input = st.columns([1, 3])
     
-    with col1:
-        repo_input = st.text_input(
-            "GitHub仓库",
-            value="",
-            placeholder="例如: owner/repo 或 https://github.com/owner/repo",
-            help="输入要管理的GitHub仓库"
+    with col_method:
+        mr_input_method = st.selectbox(
+            "输入方式",
+            ["手动输入", "最近使用"],
+            key="mr_input_method",
+            help="选择仓库输入方式"
         )
+    
+    with col_input:
+        if mr_input_method == "手动输入":
+            repo_input = st.text_input(
+                "GitHub仓库",
+                value="",
+                placeholder="例如: owner/repo 或 https://github.com/owner/repo",
+                help="输入要管理的GitHub仓库",
+                key="mr_repo_input"
+            )
+        else:  # 最近使用
+            history_manager = get_repo_history_manager()
+            recent_repos = history_manager.get_repos_by_type("remote")  # 只显示远程仓库
+            
+            if recent_repos:
+                display_options = []
+                repo_paths = []
+                
+                for repo in recent_repos:
+                    display_name = f"🌐 {repo['name']} - {repo['path']}"
+                    display_options.append(display_name)
+                    repo_paths.append(repo["path"])
+                
+                selected_index = st.selectbox(
+                    "选择远程仓库",
+                    range(len(display_options)),
+                    format_func=lambda i: display_options[i],
+                    help="从最近使用的远程仓库中选择",
+                    key="mr_recent_select"
+                )
+                
+                repo_input = repo_paths[selected_index]
+            else:
+                st.info("📭 暂无最近使用的远程仓库")
+                repo_input = st.text_input(
+                    "GitHub仓库",
+                    value="",
+                    placeholder="例如: owner/repo",
+                    help="输入GitHub仓库地址",
+                    key="mr_repo_fallback"
+                )
+    
+    col2, col3 = st.columns([1, 1])
     
     with col2:
         days_range = st.number_input(
@@ -1151,6 +1224,9 @@ Token前缀: {github_token[:10] + '...' if github_token and len(github_token) > 
                     repo_info = github_client.get_repository_info(repo_input)
                     st.session_state['current_repo_info'] = repo_info
                     progress_container.success(f"✅ 仓库验证成功: {repo_info['full_name']}")
+                    
+                    # 添加到仓库历史记录
+                    add_to_recent_repos(repo_input)
                 except Exception as e:
                     progress_container.error(f"❌ 仓库访问失败: {str(e)}")
                     
