@@ -995,12 +995,52 @@ def display_mr_management(analyzer, config):
         
         if not success:
             st.error(f"❌ GitHub连接失败: {message}")
-            if st.button("重新配置"):
+            
+            # 显示常见问题解决方案
+            with st.expander("🔧 故障排除", expanded=True):
+                st.markdown("""
+                **常见问题及解决方案：**
+                
+                **1. Token格式错误**
+                - 确保token以 `ghp_` 开头（Personal Access Token）
+                - 检查token是否完整复制（通常40-50个字符）
+                
+                **2. Token权限不足**
+                - 访问 [GitHub Token设置](https://github.com/settings/tokens)
+                - 确保勾选了以下权限：
+                  - `repo` (访问私有仓库) 或 `public_repo` (访问公开仓库)
+                  - `user` (读取用户信息)
+                
+                **3. Token已过期**
+                - 检查token的过期时间
+                - 如已过期，请生成新的token
+                
+                **4. 网络连接问题**
+                - 检查网络连接是否正常
+                - 确认可以访问 github.com
+                """)
+            
+            if st.button("🔄 重新配置Token"):
                 del st.session_state['github_token']
                 st.rerun()
             return
         
         st.success(f"✅ GitHub连接成功: {message}")
+        
+        # 检查token权限
+        perm_success, perm_message, permissions = github_client.check_token_permissions()
+        
+        if perm_success:
+            with st.expander("🔐 Token权限信息", expanded=False):
+                st.markdown(f"**权限检查结果:** {perm_message}")
+                if permissions:
+                    st.markdown("**检测到的权限:**")
+                    for perm in permissions:
+                        st.markdown(f"- ✅ `{perm}`")
+                else:
+                    st.warning("⚠️ 未检测到明确的权限信息")
+        else:
+            st.warning(f"⚠️ {perm_message}")
         
         # 显示连接成功后的提示
         with st.expander("💡 使用提示", expanded=False):
@@ -1015,10 +1055,27 @@ def display_mr_management(analyzer, config):
             - `facebook/react` - React JavaScript库
             - `tensorflow/tensorflow` - TensorFlow机器学习
             - `kubernetes/kubernetes` - Kubernetes容器编排
+            
+            **权限说明：**
+            - 公开仓库需要 `public_repo` 权限
+            - 私有仓库需要 `repo` 权限
+            - 某些功能可能需要 `user` 权限
             """)
         
     except Exception as e:
         st.error(f"❌ GitHub集成初始化失败: {str(e)}")
+        
+        with st.expander("🐛 调试信息", expanded=False):
+            st.code(f"""
+错误类型: {type(e).__name__}
+错误消息: {str(e)}
+Token长度: {len(github_token) if github_token else 0}
+Token前缀: {github_token[:10] + '...' if github_token and len(github_token) > 10 else github_token}
+            """)
+        
+        if st.button("🔄 重新配置Token"):
+            del st.session_state['github_token']
+            st.rerun()
         return
     
     # 用户设置
@@ -1084,35 +1141,128 @@ def display_mr_management(analyzer, config):
     
     # 获取PR数据
     if st.button("🔄 刷新PR数据") or 'mr_data' not in st.session_state:
+        progress_container = st.container()
+        
         with st.spinner("📥 正在获取PR数据..."):
             try:
-                # 获取仓库信息
-                repo_info = github_client.get_repository_info(repo_input)
-                st.session_state['current_repo_info'] = repo_info
-                
-                # 获取PR列表
-                prs = github_client.get_pull_requests(repo_input, days=days_range, state=pr_state)
-                st.session_state['mr_data'] = prs
-                
-                # 初始化数据库
-                db = MRDatabase()
-                
-                # 存储PR数据到数据库
-                for pr in prs:
-                    pr_id = db.insert_or_update_pr(pr)
+                # 步骤1: 获取仓库信息
+                progress_container.info("🔍 正在验证仓库访问权限...")
+                try:
+                    repo_info = github_client.get_repository_info(repo_input)
+                    st.session_state['current_repo_info'] = repo_info
+                    progress_container.success(f"✅ 仓库验证成功: {repo_info['full_name']}")
+                except Exception as e:
+                    progress_container.error(f"❌ 仓库访问失败: {str(e)}")
                     
-                    # 获取PR评论以查找pr-agent结果
-                    comments = github_client.get_pr_comments(repo_input, pr['pr_number'])
-                    pr_agent_reviews = github_client.find_pr_agent_reviews(comments)
-                    
-                    # 存储review结果
-                    for review in pr_agent_reviews:
-                        db.insert_review_result(pr_id, review)
+                    # 显示详细的故障排除信息
+                    with st.expander("🔧 仓库访问故障排除", expanded=True):
+                        st.markdown(f"""
+                        **仓库地址:** `{repo_input}`
+                        **错误信息:** {str(e)}
+                        
+                        **可能的原因：**
+                        1. **仓库不存在**: 请检查仓库名称是否正确
+                        2. **权限不足**: 
+                           - 公开仓库需要 `public_repo` 权限
+                           - 私有仓库需要 `repo` 权限
+                        3. **仓库地址格式错误**: 
+                           - 正确格式: `owner/repo`
+                           - 示例: `microsoft/vscode`
+                        4. **网络问题**: 检查网络连接
+                        
+                        **解决方案：**
+                        - 检查token权限设置
+                        - 确认仓库名称正确
+                        - 尝试访问公开仓库进行测试
+                        """)
+                    return
                 
-                st.success(f"✅ 成功获取 {len(prs)} 个PR的数据")
+                # 步骤2: 获取PR列表
+                progress_container.info(f"📋 正在获取最近 {days_range} 天的 {pr_state} 状态PR...")
+                try:
+                    prs = github_client.get_pull_requests(repo_input, days=days_range, state=pr_state)
+                    st.session_state['mr_data'] = prs
+                    progress_container.success(f"✅ 成功获取 {len(prs)} 个PR")
+                except Exception as e:
+                    progress_container.error(f"❌ 获取PR列表失败: {str(e)}")
+                    
+                    # 显示PR获取故障排除信息
+                    with st.expander("🔧 PR获取故障排除", expanded=True):
+                        st.markdown(f"""
+                        **错误详情:** {str(e)}
+                        
+                        **常见问题：**
+                        1. **权限不足**: Token缺少访问PR的权限
+                        2. **API限制**: GitHub API调用频率限制
+                        3. **仓库无PR**: 该时间范围内可能没有PR
+                        
+                        **建议操作：**
+                        - 检查token是否有 `repo` 或 `public_repo` 权限
+                        - 尝试增加时间范围
+                        - 检查仓库是否有PR存在
+                        - 稍后重试（可能是API限制）
+                        """)
+                    return
+                
+                # 步骤3: 处理PR数据和pr-agent结果
+                if prs:
+                    progress_container.info("💾 正在处理PR数据和pr-agent结果...")
+                    
+                    # 初始化数据库
+                    db = MRDatabase()
+                    
+                    processed_count = 0
+                    pr_agent_count = 0
+                    
+                    # 存储PR数据到数据库
+                    for pr in prs:
+                        try:
+                            pr_id = db.insert_or_update_pr(pr)
+                            processed_count += 1
+                            
+                            # 获取PR评论以查找pr-agent结果
+                            try:
+                                comments = github_client.get_pr_comments(repo_input, pr['pr_number'])
+                                pr_agent_reviews = github_client.find_pr_agent_reviews(comments)
+                                
+                                # 存储review结果
+                                for review in pr_agent_reviews:
+                                    db.insert_review_result(pr_id, review)
+                                    pr_agent_count += 1
+                            except Exception as comment_e:
+                                # 评论获取失败不影响主流程
+                                st.warning(f"⚠️ PR #{pr['pr_number']} 评论获取失败: {str(comment_e)}")
+                                
+                        except Exception as pr_e:
+                            st.warning(f"⚠️ PR #{pr.get('pr_number', 'Unknown')} 处理失败: {str(pr_e)}")
+                    
+                    progress_container.success(f"✅ 数据处理完成!")
+                    
+                    # 显示处理结果摘要
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("📋 PR总数", len(prs))
+                    with col2:
+                        st.metric("💾 已处理", processed_count)
+                    with col3:
+                        st.metric("🤖 pr-agent结果", pr_agent_count)
+                else:
+                    progress_container.info("📭 该时间范围内没有找到PR")
+                    st.info(f"💡 尝试增加时间范围或检查仓库 '{repo_input}' 是否有PR")
                 
             except Exception as e:
-                st.error(f"❌ 获取PR数据失败: {str(e)}")
+                progress_container.error(f"❌ 数据获取过程中发生未知错误: {str(e)}")
+                
+                # 显示详细的调试信息
+                with st.expander("🐛 详细错误信息", expanded=False):
+                    st.code(f"""
+错误类型: {type(e).__name__}
+错误消息: {str(e)}
+仓库地址: {repo_input}
+时间范围: {days_range} 天
+PR状态: {pr_state}
+Token状态: {'已配置' if github_token else '未配置'}
+                    """)
                 return
     
     # 显示仓库信息

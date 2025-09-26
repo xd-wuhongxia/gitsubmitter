@@ -68,11 +68,67 @@ class GitHubIntegration:
         """
         try:
             user = self.github.get_user()
-            return True, f"Connected as {user.login}"
+            # 获取用户的详细信息用于调试
+            user_info = {
+                'login': user.login,
+                'name': user.name or 'N/A',
+                'email': user.email or 'N/A',
+                'public_repos': user.public_repos,
+                'private_repos': user.total_private_repos if hasattr(user, 'total_private_repos') else 'N/A'
+            }
+            return True, f"Connected as {user_info['login']} (Public: {user_info['public_repos']}, Private: {user_info['private_repos']})"
         except GithubException as e:
-            return False, f"GitHub API Error: {e.data.get('message', str(e))}"
+            error_details = {
+                'status': getattr(e, 'status', 'Unknown'),
+                'message': e.data.get('message', str(e)) if hasattr(e, 'data') and e.data else str(e),
+                'documentation_url': e.data.get('documentation_url', '') if hasattr(e, 'data') and e.data else ''
+            }
+            return False, f"GitHub API Error [{error_details['status']}]: {error_details['message']}"
         except Exception as e:
-            return False, f"Connection Error: {str(e)}"
+            return False, f"Connection Error: {str(e)} (Type: {type(e).__name__})"
+    
+    def check_token_permissions(self) -> Tuple[bool, str, List[str]]:
+        """
+        检查token权限
+        
+        Returns:
+            (是否成功, 消息, 权限列表)
+        """
+        try:
+            # 通过访问用户信息来检查基本权限
+            user = self.github.get_user()
+            
+            # 尝试获取权限信息
+            permissions = []
+            
+            # 检查是否可以访问公共仓库
+            try:
+                repos = list(user.get_repos(type='public', per_page=1))
+                permissions.append('public_repo')
+            except:
+                pass
+            
+            # 检查是否可以访问私有仓库
+            try:
+                repos = list(user.get_repos(type='private', per_page=1))
+                permissions.append('repo')
+            except:
+                pass
+            
+            # 检查是否可以读取用户信息
+            try:
+                _ = user.email
+                permissions.append('user')
+            except:
+                pass
+            
+            if permissions:
+                return True, f"Token权限验证成功", permissions
+            else:
+                return False, "Token权限不足，请确保token有适当的权限", []
+                
+        except Exception as e:
+            return False, f"权限检查失败: {str(e)}", []
     
     def parse_repo_url(self, repo_input: str) -> Tuple[str, str]:
         """
@@ -90,8 +146,8 @@ class GitHubIntegration:
         # 处理GitHub URL
         github_url_patterns = [
             r'https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$',
-            r'git@github\.com:([^/]+)/([^/]+?)(?:\.git)?$',
-            r'^([^/]+)/([^/]+)$'  # 简单的 owner/repo 格式
+            r'git@github\.com:([^/]+)/([^/]+?)(?:\.git)?/?$',
+            r'^([^/]+)/([^/]+?)(?:\.git)?/?$'  # 简单的 owner/repo 格式
         ]
         
         for pattern in github_url_patterns:
@@ -152,20 +208,55 @@ class GitHubIntegration:
             PR列表
         """
         try:
-            owner, repo_name = self.parse_repo_url(repo_input)
-            repo = self.github.get_repo(f"{owner}/{repo_name}")
+            # 解析仓库URL
+            try:
+                owner, repo_name = self.parse_repo_url(repo_input)
+            except ValueError as e:
+                raise Exception(f"仓库地址格式错误: {str(e)}")
+            
+            # 获取仓库对象
+            try:
+                repo = self.github.get_repo(f"{owner}/{repo_name}")
+            except GithubException as e:
+                if e.status == 404:
+                    raise Exception(f"仓库 '{owner}/{repo_name}' 不存在或您没有访问权限")
+                elif e.status == 403:
+                    raise Exception(f"访问仓库 '{owner}/{repo_name}' 被拒绝，请检查token权限")
+                else:
+                    raise Exception(f"访问仓库失败 [{e.status}]: {e.data.get('message', str(e))}")
+            
+            # 检查仓库基本信息
+            repo_info = {
+                'name': repo.full_name,
+                'private': repo.private,
+                'permissions': {
+                    'admin': repo.permissions.admin if hasattr(repo, 'permissions') else False,
+                    'push': repo.permissions.push if hasattr(repo, 'permissions') else False,
+                    'pull': repo.permissions.pull if hasattr(repo, 'permissions') else False
+                }
+            }
             
             # 计算时间范围
             since = datetime.now() - timedelta(days=days)
             
             # 获取PR列表
-            pulls = repo.get_pulls(state=state, sort='created', direction='desc')
+            try:
+                pulls = repo.get_pulls(state=state, sort='created', direction='desc')
+            except GithubException as e:
+                if e.status == 403:
+                    raise Exception(f"获取PR列表被拒绝，token可能缺少必要权限 (需要 'repo' 或 'public_repo' 权限)")
+                else:
+                    raise Exception(f"获取PR列表失败 [{e.status}]: {e.data.get('message', str(e))}")
             
             pr_list = []
+            processed_count = 0
+            
             for pr in pulls:
                 # 只获取指定时间范围内的PR
                 if pr.created_at < since:
                     break
+                
+                processed_count += 1
                 
                 # 获取PR统计信息
                 additions = 0
@@ -176,8 +267,11 @@ class GitHubIntegration:
                     additions = pr.additions
                     deletions = pr.deletions
                     changed_files = pr.changed_files
-                except:
-                    # 如果无法获取统计信息，使用默认值
+                except GithubException as e:
+                    # 某些PR可能无法获取统计信息
+                    pass
+                except Exception:
+                    # 其他统计获取错误
                     pass
                 
                 pr_data = {
@@ -201,11 +295,20 @@ class GitHubIntegration:
                 }
                 
                 pr_list.append(pr_data)
+                
+                # 限制处理数量，避免API限制
+                if processed_count >= 100:
+                    break
             
             return pr_list
             
+        except GithubException as e:
+            raise Exception(f"GitHub API错误 [{e.status}]: {e.data.get('message', str(e))}")
         except Exception as e:
-            raise Exception(f"Error fetching pull requests: {str(e)}")
+            if "仓库地址格式错误" in str(e) or "仓库" in str(e) and "不存在" in str(e):
+                raise e  # 重新抛出已经格式化的错误
+            else:
+                raise Exception(f"获取PR数据时发生未知错误: {str(e)} (类型: {type(e).__name__})")
     
     def get_pr_comments(self, repo_input: str, pr_number: int) -> List[Dict]:
         """
