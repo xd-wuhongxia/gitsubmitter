@@ -545,6 +545,8 @@ def display_commit_analysis(commits_df: pd.DataFrame, visualizer: GitVisualizer)
     st.markdown("### 最近提交")
     recent_commits = commits_df.head(10)[['hash', 'author', 'date', 'message', 'files_changed', 'lines_changed']].copy()
     recent_commits['date'] = recent_commits['date'].dt.strftime('%Y-%m-%d %H:%M')
+    # 清理message中的emoji字符
+    recent_commits['message'] = recent_commits['message'].apply(clean_message_for_display)
     st.dataframe(recent_commits, width='stretch')
 
 
@@ -757,6 +759,31 @@ def display_branch_graph_analysis(analyzer: GitAnalyzer, visualizer: GitVisualiz
         st.error(f"分支关系图分析出错: {str(e)}")
 
 
+def clean_message_for_display(message: str) -> str:
+    """清理消息中的emoji和特殊Unicode字符，确保在所有环境下正确显示"""
+    import re
+    
+    if not isinstance(message, str):
+        message = str(message)
+    
+    # 移除emoji和其他特殊Unicode字符 (U+1F000 到 U+1FFFF范围)
+    # 保留常见的中文、英文、标点符号等
+    cleaned = re.sub(r'[\U00010000-\U0010ffff]', '', message)
+    
+    # 移除其他常见的装饰性Unicode字符
+    cleaned = re.sub(r'[\u2600-\u27BF]', '', cleaned)  # 各种符号
+    cleaned = re.sub(r'[\uE000-\uF8FF]', '', cleaned)  # 私有使用区
+    cleaned = re.sub(r'[\uFE00-\uFE0F]', '', cleaned)  # 变体选择符
+    
+    # 移除零宽字符
+    cleaned = re.sub(r'[\u200B-\u200D\uFEFF]', '', cleaned)
+    
+    # 清理多余的空格和换行
+    cleaned = ' '.join(cleaned.split())
+    
+    return cleaned.strip()
+
+
 def display_code_review_analysis(analyzer: GitAnalyzer, config: dict):
     """显示Code Review统计分析"""
     st.markdown("## 🔍 Code Review 统计")
@@ -956,7 +983,7 @@ def display_code_review_analysis(analyzer: GitAnalyzer, config: dict):
                 {
                     '时间': r['date'].strftime('%Y-%m-%d %H:%M') if hasattr(r['date'], 'strftime') else str(r['date']),
                     '作者': r['author'],
-                    '提交信息': r['message']
+                    '提交信息': clean_message_for_display(r['message'])
                 }
                 for r in recent_reviews
             ])
