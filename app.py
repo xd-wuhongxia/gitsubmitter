@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, date
 import os
 from pathlib import Path
 import git
+from typing import Dict, List, Optional
 
 # 导入自定义模块
 from git_analyzer import GitAnalyzer
@@ -16,6 +17,7 @@ from visualizations import GitVisualizer
 from mr_database import MRDatabase
 from github_integration import GitHubIntegration
 from repo_history import RepoHistoryManager
+import json
 
 
 def init_page_config():
@@ -189,6 +191,41 @@ def get_repo_history_manager() -> RepoHistoryManager:
     if 'repo_history_manager' not in st.session_state:
         st.session_state.repo_history_manager = RepoHistoryManager()
     return st.session_state.repo_history_manager
+
+
+def get_code_review_config() -> Dict:
+    """获取Code Review配置"""
+    if 'code_review_config' not in st.session_state:
+        # 尝试从文件加载
+        config_file = 'code_review_config.json'
+        if os.path.exists(config_file):
+            try:
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    st.session_state.code_review_config = json.load(f)
+            except:
+                st.session_state.code_review_config = {
+                    'keywords': ['pr-agent', 'codiumai-pr-agent', 'github-actions[bot]'],
+                    'enabled': True
+                }
+        else:
+            st.session_state.code_review_config = {
+                'keywords': ['pr-agent', 'codiumai-pr-agent', 'github-actions[bot]'],
+                'enabled': True
+            }
+    return st.session_state.code_review_config
+
+
+def save_code_review_config(config: Dict) -> bool:
+    """保存Code Review配置"""
+    try:
+        config_file = 'code_review_config.json'
+        with open(config_file, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        st.session_state.code_review_config = config
+        return True
+    except Exception as e:
+        st.error(f"保存配置失败: {str(e)}")
+        return False
 
 
 def get_recent_repos() -> list:
@@ -720,6 +757,232 @@ def display_branch_graph_analysis(analyzer: GitAnalyzer, visualizer: GitVisualiz
         st.error(f"分支关系图分析出错: {str(e)}")
 
 
+def display_code_review_analysis(analyzer: GitAnalyzer, config: dict):
+    """显示Code Review统计分析"""
+    st.markdown("## 🔍 Code Review 统计")
+    
+    # 获取Code Review配置
+    cr_config = get_code_review_config()
+    
+    # 配置部分
+    with st.expander("⚙️ Code Review 配置", expanded=False):
+        st.markdown("### 🤖 机器人关键词配置")
+        st.markdown("配置用于识别自动化Code Review的关键词（如机器人名称）")
+        
+        # 启用/禁用开关
+        enabled = st.checkbox(
+            "启用Code Review统计",
+            value=cr_config.get('enabled', True),
+            help="是否启用Code Review统计功能"
+        )
+        
+        # 关键词输入
+        keywords_text = st.text_area(
+            "关键词列表（每行一个）",
+            value='\n'.join(cr_config.get('keywords', [])),
+            height=100,
+            help="输入用于识别Code Review的关键词，如机器人名称、用户名等"
+        )
+        
+        # 示例关键词
+        st.markdown("""
+        **常见机器人关键词示例：**
+        - `pr-agent` - PR Agent 机器人
+        - `codiumai-pr-agent` - CodiumAI PR Agent
+        - `github-actions[bot]` - GitHub Actions 机器人
+        - `codecov` - Codecov 机器人
+        - `sonarcloud[bot]` - SonarCloud 机器人
+        """)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("💾 保存配置", type="primary"):
+                keywords = [k.strip() for k in keywords_text.split('\n') if k.strip()]
+                new_config = {
+                    'keywords': keywords,
+                    'enabled': enabled
+                }
+                if save_code_review_config(new_config):
+                    st.success("✅ 配置已保存！")
+                    st.rerun()
+        
+        with col2:
+            if st.button("🔄 重置为默认"):
+                default_config = {
+                    'keywords': ['pr-agent', 'codiumai-pr-agent', 'github-actions[bot]'],
+                    'enabled': True
+                }
+                if save_code_review_config(default_config):
+                    st.success("✅ 已重置为默认配置！")
+                    st.rerun()
+    
+    if not cr_config.get('enabled', True):
+        st.info("💡 Code Review统计功能已禁用，请在配置中启用")
+        return
+    
+    keywords = cr_config.get('keywords', [])
+    if not keywords:
+        st.warning("⚠️ 未配置任何关键词，请在配置中添加")
+        return
+    
+    try:
+        # 获取commit历史
+        commits_df = get_cached_commit_stats(
+            config['repo_path'],
+            config['start_date'],
+            config['end_date'],
+            config['branch']
+        )
+        
+        if commits_df.empty:
+            st.warning("暂无提交数据可供分析")
+            return
+        
+        # 分析commit message中的关键词
+        st.markdown("### 📊 统计概览")
+        st.markdown(f"**监控关键词**: {', '.join([f'`{k}`' for k in keywords])}")
+        
+        # 统计包含关键词的commit
+        review_stats = {
+            'total_commits': len(commits_df),
+            'reviewed_commits': 0,
+            'review_rate': 0.0,
+            'keyword_counts': {k: 0 for k in keywords},
+            'reviews_by_author': {},
+            'reviews_over_time': []
+        }
+        
+        # 分析每个commit
+        for _, commit in commits_df.iterrows():
+            message = str(commit.get('message', '')).lower()
+            author = commit.get('author', 'Unknown')
+            date = commit.get('date')
+            
+            # 检查是否包含任何关键词
+            has_review = False
+            for keyword in keywords:
+                if keyword.lower() in message:
+                    review_stats['keyword_counts'][keyword] += 1
+                    has_review = True
+            
+            if has_review:
+                review_stats['reviewed_commits'] += 1
+                
+                # 按作者统计
+                if author not in review_stats['reviews_by_author']:
+                    review_stats['reviews_by_author'][author] = 0
+                review_stats['reviews_by_author'][author] += 1
+                
+                # 时间序列统计
+                review_stats['reviews_over_time'].append({
+                    'date': date,
+                    'author': author,
+                    'message': commit.get('message', '')[:100]
+                })
+        
+        # 计算review率
+        if review_stats['total_commits'] > 0:
+            review_stats['review_rate'] = (review_stats['reviewed_commits'] / review_stats['total_commits']) * 100
+        
+        # 显示关键指标
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric(
+                label="📝 总提交数",
+                value=review_stats['total_commits']
+            )
+        
+        with col2:
+            st.metric(
+                label="✅ 已Review提交",
+                value=review_stats['reviewed_commits']
+            )
+        
+        with col3:
+            st.metric(
+                label="📈 Review覆盖率",
+                value=f"{review_stats['review_rate']:.1f}%"
+            )
+        
+        with col4:
+            total_reviews = sum(review_stats['keyword_counts'].values())
+            st.metric(
+                label="🔍 Review总数",
+                value=total_reviews
+            )
+        
+        # 关键词统计
+        st.markdown("### 🤖 关键词出现次数")
+        keyword_df = pd.DataFrame([
+            {'关键词': k, '出现次数': v, '占比': f"{(v/total_reviews*100):.1f}%" if total_reviews > 0 else "0%"}
+            for k, v in review_stats['keyword_counts'].items()
+        ]).sort_values('出现次数', ascending=False)
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            # 使用bar chart显示
+            if not keyword_df.empty and total_reviews > 0:
+                st.bar_chart(keyword_df.set_index('关键词')['出现次数'])
+        
+        with col2:
+            st.dataframe(keyword_df, use_container_width=True, hide_index=True)
+        
+        # 按作者统计
+        if review_stats['reviews_by_author']:
+            st.markdown("### 👥 作者Review统计")
+            author_df = pd.DataFrame([
+                {'作者': author, 'Review次数': count}
+                for author, count in sorted(
+                    review_stats['reviews_by_author'].items(),
+                    key=lambda x: x[1],
+                    reverse=True
+                )
+            ])
+            
+            st.dataframe(author_df, use_container_width=True, hide_index=True)
+        
+        # 最近Review记录
+        if review_stats['reviews_over_time']:
+            st.markdown("### 📜 最近Review记录")
+            recent_reviews = sorted(
+                review_stats['reviews_over_time'],
+                key=lambda x: x['date'],
+                reverse=True
+            )[:20]
+            
+            review_display_df = pd.DataFrame([
+                {
+                    '时间': r['date'].strftime('%Y-%m-%d %H:%M') if hasattr(r['date'], 'strftime') else str(r['date']),
+                    '作者': r['author'],
+                    '提交信息': r['message']
+                }
+                for r in recent_reviews
+            ])
+            
+            st.dataframe(review_display_df, use_container_width=True, hide_index=True)
+        
+        # 趋势分析
+        if len(review_stats['reviews_over_time']) > 1:
+            st.markdown("### 📈 Review趋势分析")
+            st.info("💡 基于commit message中的关键词统计Review活动趋势")
+            
+            # 按日期聚合
+            review_dates = pd.DataFrame(review_stats['reviews_over_time'])
+            if not review_dates.empty and 'date' in review_dates.columns:
+                review_dates['date_only'] = pd.to_datetime(review_dates['date']).dt.date
+                daily_reviews = review_dates.groupby('date_only').size().reset_index(name='review_count')
+                daily_reviews.columns = ['日期', 'Review数量']
+                
+                st.line_chart(daily_reviews.set_index('日期'))
+        
+    except Exception as e:
+        st.error(f"Code Review分析出错: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
+
+
 def display_merge_direction_analysis(analyzer: GitAnalyzer, visualizer: GitVisualizer):
     """显示合并方向历史分析"""
     st.markdown("## 🔀 合并方向历史")
@@ -927,10 +1190,10 @@ def main():
             )
         
         # 创建选项卡
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
             "📝 提交分析", "👥 作者分析", "⏰时间分析", 
             "🔀 合并分析", "📁 文件分析", "🌳 分支分析",
-            "🌐 分支关系图", "🔀 合并方向历史", "🔄 MR管理"
+            "🌐 分支关系图", "🔀 合并方向历史", "🔍 Code Review统计", "🔄 MR管理"
         ])
         
         with tab1:
@@ -958,6 +1221,9 @@ def main():
             display_merge_direction_analysis(analyzer, visualizer)
         
         with tab9:
+            display_code_review_analysis(analyzer, config)
+        
+        with tab10:
             display_mr_management(analyzer, config)
             
     except ValueError as e:
