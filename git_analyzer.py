@@ -34,6 +34,16 @@ class GitAnalyzer:
             else:
                 # 处理本地仓库
                 self.repo = git.Repo(repo_path)
+            
+            # 设置Git配置以正确处理UTF-8编码
+            try:
+                with self.repo.config_writer() as git_config:
+                    git_config.set_value('i18n', 'commitEncoding', 'utf-8')
+                    git_config.set_value('i18n', 'logOutputEncoding', 'utf-8')
+            except Exception:
+                # 如果配置写入失败，继续执行（某些只读仓库可能会失败）
+                pass
+                
         except git.exc.InvalidGitRepositoryError:
             raise ValueError(f"路径 {repo_path} 不是有效的Git仓库")
         except Exception as e:
@@ -236,13 +246,23 @@ class GitAnalyzer:
                 # 移除时区信息以避免兼容性问题
                 commit_date = commit_date.replace(tzinfo=None)
             
+            # 处理commit message的编码
+            try:
+                # 尝试获取正确编码的message
+                if isinstance(commit.message, bytes):
+                    message = commit.message.decode('utf-8', errors='replace').strip()
+                else:
+                    message = commit.message.strip()
+            except Exception:
+                message = str(commit.message).strip()
+            
             commits_data.append({
                 'hash': commit.hexsha[:8],
                 'full_hash': commit.hexsha,
                 'author': commit.author.name,
                 'author_email': commit.author.email,
                 'date': commit_date,
-                'message': commit.message.strip(),
+                'message': message,
                 'files_changed': stats['files'],
                 'insertions': stats['insertions'],
                 'deletions': stats['deletions'],
@@ -281,9 +301,18 @@ class GitAnalyzer:
         for commit in commits:
             # 检查是否是合并提交（有多个父提交）
             if len(commit.parents) > 1:
+                # 处理commit message的编码
+                try:
+                    if isinstance(commit.message, bytes):
+                        message = commit.message.decode('utf-8', errors='replace').strip()
+                    else:
+                        message = commit.message.strip()
+                except Exception:
+                    message = str(commit.message).strip()
+                
                 # 解析合并信息
                 merge_pattern = r"Merge.*?(\w+).*?into.*?(\w+)"
-                match = re.search(merge_pattern, commit.message, re.IGNORECASE)
+                match = re.search(merge_pattern, message, re.IGNORECASE)
                 
                 source_branch = "unknown"
                 target_branch = "unknown"
@@ -302,7 +331,7 @@ class GitAnalyzer:
                     'full_hash': commit.hexsha,
                     'author': commit.author.name,
                     'date': commit_date,
-                    'message': commit.message.strip(),
+                    'message': message,
                     'source_branch': source_branch,
                     'target_branch': target_branch,
                     'parents_count': len(commit.parents)
@@ -546,12 +575,24 @@ class GitAnalyzer:
                     if hasattr(commit_date, 'replace'):
                         commit_date = commit_date.replace(tzinfo=None)
                     
+                    # 处理commit message的编码
+                    try:
+                        if isinstance(commit.message, bytes):
+                            message = commit.message.decode('utf-8', errors='replace').strip()
+                        else:
+                            message = commit.message.strip()
+                    except Exception:
+                        message = str(commit.message).strip()
+                    
+                    # 截断长消息
+                    display_message = message[:50] + '...' if len(message) > 50 else message
+                    
                     graph_data['commits'].append({
                         'hash': commit.hexsha[:8],
                         'full_hash': commit.hexsha,
                         'author': commit.author.name,
                         'date': commit_date,
-                        'message': commit.message.strip()[:50] + '...' if len(commit.message.strip()) > 50 else commit.message.strip(),
+                        'message': display_message,
                         'branches': branch_names,
                         'parents': [p.hexsha for p in commit.parents],
                         'is_merge': len(commit.parents) > 1
@@ -635,8 +676,15 @@ class GitAnalyzer:
             if hasattr(commit_date, 'replace'):
                 commit_date = commit_date.replace(tzinfo=None)
             
-            # 解析合并消息
-            message = commit.message.strip()
+            # 处理commit message的编码
+            try:
+                if isinstance(commit.message, bytes):
+                    message = commit.message.decode('utf-8', errors='replace').strip()
+                else:
+                    message = commit.message.strip()
+            except Exception:
+                message = str(commit.message).strip()
+            
             source_branch = "unknown"
             target_branch = "unknown"
             
@@ -662,10 +710,21 @@ class GitAnalyzer:
             # 获取父提交信息
             parents_info = []
             for i, parent in enumerate(commit.parents):
+                # 处理父提交message的编码
+                try:
+                    if isinstance(parent.message, bytes):
+                        parent_message = parent.message.decode('utf-8', errors='replace').strip()
+                    else:
+                        parent_message = parent.message.strip()
+                except Exception:
+                    parent_message = str(parent.message).strip()
+                
+                display_parent_message = parent_message[:30] + '...' if len(parent_message) > 30 else parent_message
+                
                 parents_info.append({
                     'hash': parent.hexsha[:8],
                     'author': parent.author.name,
-                    'message': parent.message.strip()[:30] + '...' if len(parent.message.strip()) > 30 else parent.message.strip()
+                    'message': display_parent_message
                 })
             
             # 计算合并统计 - 处理浅克隆问题
