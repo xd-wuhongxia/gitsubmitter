@@ -16,18 +16,28 @@ class RepoHistoryManager:
     
     def __init__(self, config_file: str = "repo_history.json", max_records: int = 15):
         """
-        初始化仓库历史管理器
+        Create a RepoHistoryManager and initialize its persisted history.
         
-        Args:
-            config_file: 配置文件路径
-            max_records: 最大记录数量
+        Parameters:
+            config_file (str): Path to the JSON file used to persist repository history.
+            max_records (int): Maximum number of repository entries to retain; older entries are removed when this limit is exceeded.
+        
+        Notes:
+            The instance's `history_data` is populated by loading the configured file (or a default structure if loading fails).
         """
         self.config_file = config_file
         self.max_records = max_records
         self.history_data = self._load_history()
     
     def _load_history(self) -> Dict:
-        """从文件加载历史记录"""
+        """
+        Load repository history from the configured JSON file, falling back to a default structure when the file is missing or cannot be parsed.
+        
+        Returns:
+            dict: History object with keys:
+                - "recent_repos" (list): List of repository records (empty list when no history).
+                - "last_updated" (str): ISO 8601 timestamp of the last update (current time when falling back).
+        """
         if os.path.exists(self.config_file):
             try:
                 with open(self.config_file, 'r', encoding='utf-8') as f:
@@ -42,7 +52,11 @@ class RepoHistoryManager:
         }
     
     def _save_history(self):
-        """保存历史记录到文件"""
+        """
+        Persist the in-memory repository history to the configured JSON file.
+        
+        Updates `history_data["last_updated"]` to the current ISO timestamp and writes `history_data` to `self.config_file` as UTF-8 JSON. If the write operation fails, an error message is printed and the exception is suppressed.
+        """
         self.history_data["last_updated"] = datetime.now().isoformat()
         try:
             with open(self.config_file, 'w', encoding='utf-8') as f:
@@ -52,13 +66,10 @@ class RepoHistoryManager:
     
     def _detect_repo_type(self, repo_path: str) -> str:
         """
-        检测仓库类型
+        Determine whether a repository path refers to a local or remote repository.
         
-        Args:
-            repo_path: 仓库路径
-            
         Returns:
-            'local' 或 'remote'
+            'local' if the path is identified as a local repository path, 'remote' if it is identified as a remote repository.
         """
         # 检查是否是本地路径
         if os.path.isabs(repo_path) or repo_path.startswith('.'):
@@ -80,14 +91,14 @@ class RepoHistoryManager:
     
     def _extract_repo_name(self, repo_path: str, repo_type: str) -> str:
         """
-        提取仓库名称
+        Extracts the repository name from the given path.
         
-        Args:
-            repo_path: 仓库路径
-            repo_type: 仓库类型
-            
+        Parameters:
+            repo_path (str): Local filesystem path or remote repository identifier (URL or "owner/repo").
+            repo_type (str): Either "local" or "remote", which selects the extraction strategy.
+        
         Returns:
-            仓库名称
+            str: The repository name (for local paths, the basename; for remote identifiers, the last path segment with any trailing ".git" removed).
         """
         if repo_type == 'local':
             return os.path.basename(os.path.abspath(repo_path))
@@ -101,14 +112,17 @@ class RepoHistoryManager:
     
     def _generate_description(self, repo_path: str, repo_type: str) -> str:
         """
-        生成仓库描述
+        Generate a human-readable description for a repository path.
         
-        Args:
-            repo_path: 仓库路径
-            repo_type: 仓库类型
-            
+        For local paths, indicates whether the path exists as a Git repository or is a plain filesystem path.
+        For remote paths, distinguishes HTTP(S) URLs from GitHub-style identifiers.
+        
+        Parameters:
+            repo_path (str): The repository path or remote identifier.
+            repo_type (str): The repository type, expected to be "local" or "remote".
+        
         Returns:
-            仓库描述
+            str: A concise description of the repository suitable for display.
         """
         if repo_type == 'local':
             if os.path.exists(repo_path):
@@ -123,13 +137,13 @@ class RepoHistoryManager:
     
     def add_repo(self, repo_path: str) -> bool:
         """
-        添加仓库到历史记录
+        Add or refresh a repository entry in the history, placing it at the front and enforcing the maximum record limit.
         
-        Args:
-            repo_path: 仓库路径
-            
+        Parameters:
+            repo_path (str): Repository path or identifier (local path, URL, or owner/repo); empty or whitespace-only values are rejected.
+        
         Returns:
-            是否添加成功
+            bool: `True` if the repository was added or refreshed, `False` if the provided `repo_path` was empty or invalid.
         """
         if not repo_path or not repo_path.strip():
             return False
@@ -170,13 +184,15 @@ class RepoHistoryManager:
     
     def get_recent_repos(self, limit: Optional[int] = None) -> List[Dict]:
         """
-        获取最近使用的仓库列表
+        Return the list of recently used repositories, pruning entries last used more than 90 days ago.
         
-        Args:
-            limit: 返回数量限制
-            
+        Prunes any entries whose `last_used` is older than 90 days; entries with unparseable `last_used` timestamps are updated to the current time and retained. If pruning or timestamp fixes occur, the history is persisted to disk. The returned list preserves recency order (most recent first).
+        
+        Parameters:
+            limit (Optional[int]): If provided, limits the number of returned entries to this value.
+        
         Returns:
-            仓库列表
+            List[Dict]: Repository records (dictionaries) ordered from most to least recent, possibly truncated by `limit`.
         """
         repos = self.history_data.get("recent_repos", [])
         
@@ -205,13 +221,13 @@ class RepoHistoryManager:
     
     def remove_repo(self, repo_path: str) -> bool:
         """
-        删除指定的仓库记录
+        Remove a repository entry matching the given path from the history.
         
-        Args:
-            repo_path: 仓库路径
-            
+        Parameters:
+            repo_path (str): Path or identifier of the repository to remove.
+        
         Returns:
-            是否删除成功
+            bool: `True` if an entry was removed and the history was saved, `False` otherwise.
         """
         original_count = len(self.history_data["recent_repos"])
         self.history_data["recent_repos"] = [
@@ -226,10 +242,10 @@ class RepoHistoryManager:
     
     def clear_history(self) -> bool:
         """
-        清空所有历史记录
+        Clear all stored repository history and persist the empty state.
         
         Returns:
-            是否清空成功
+            bool: `True` if the in-memory history was cleared and a save was attempted.
         """
         self.history_data["recent_repos"] = []
         self._save_history()
@@ -237,13 +253,13 @@ class RepoHistoryManager:
     
     def get_repos_by_type(self, repo_type: str) -> List[Dict]:
         """
-        按类型获取仓库列表
+        Filter repository records by type.
         
-        Args:
-            repo_type: 'local' 或 'remote'
-            
+        Parameters:
+        	repo_type (str): Repository type to filter by — expected values are "local" or "remote".
+        
         Returns:
-            指定类型的仓库列表
+        	List[Dict]: Repository entries whose "type" field equals the provided `repo_type`.
         """
         return [
             repo for repo in self.get_recent_repos()
@@ -252,10 +268,14 @@ class RepoHistoryManager:
     
     def get_stats(self) -> Dict:
         """
-        获取历史记录统计信息
+        Produce summary statistics for the current repository history.
         
         Returns:
-            统计信息字典
+            dict: A mapping with keys:
+                - "total" (int): Number of recent repository entries.
+                - "local" (int): Count of entries classified as local.
+                - "remote" (int): Count of entries classified as remote.
+                - "last_updated" (str | None): Timestamp of the last history update from stored data.
         """
         repos = self.get_recent_repos()
         local_count = sum(1 for repo in repos if repo.get("type") == "local")
@@ -270,13 +290,13 @@ class RepoHistoryManager:
     
     def format_repo_display(self, repo: Dict) -> str:
         """
-        格式化仓库显示名称
+        Format a repository record into a short display string containing an icon, repository name, type label, and a human-readable relative last-used time.
         
-        Args:
-            repo: 仓库记录
-            
+        Parameters:
+            repo (Dict): Repository record expected to contain at least the keys `"type"` (either `"local"` or `"remote"`), `"name"`, and `"last_used"` (ISO-8601 timestamp).
+        
         Returns:
-            格式化的显示名称
+            str: A single-line formatted display string, e.g. "🌐 repo-name (远程) - 3天前".
         """
         icon = "🌐" if repo.get("type") == "remote" else "📁"
         name = repo.get("name", "Unknown")

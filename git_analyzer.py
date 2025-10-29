@@ -18,10 +18,15 @@ class GitAnalyzer:
     
     def __init__(self, repo_path: str = "."):
         """
-        初始化Git分析器
+        Initialize the Git repository analyzer for a local repository path or a remote repository URL.
         
-        Args:
-            repo_path: Git仓库路径或远程URL
+        This sets up the analyzer's repository state (self.repo), marks whether the input is remote (self.is_remote), and may create a temporary clone directory (self.temp_dir) for remote repositories. It also attempts to configure the repository to use UTF-8 for commit and log encoding when possible.
+        
+        Parameters:
+            repo_path (str): Filesystem path to a local Git repository or a remote repository URL/shortcut.
+        
+        Raises:
+            ValueError: If the given path is not a valid Git repository or the repository cannot be accessed.
         """
         self.repo_path = repo_path
         self.is_remote = self._is_remote_url(repo_path)
@@ -202,16 +207,28 @@ class GitAnalyzer:
                         until_date: Optional[datetime] = None,
                         branch: str = "HEAD") -> pd.DataFrame:
         """
-        获取提交统计信息
-        
-        Args:
-            since_date: 开始日期
-            until_date: 结束日期  
-            branch: 分析的分支
-            
-        Returns:
-            包含提交信息的DataFrame
-        """
+                        Collects commit-level statistics for a branch within an optional date range.
+                        
+                        Each row represents a commit and includes metadata (author, date, message) plus change counts.
+                        
+                        Parameters:
+                            since_date (datetime | None): Earliest commit date to include; pass None to disable the lower bound.
+                            until_date (datetime | None): Latest commit date to include; pass None to disable the upper bound.
+                            branch (str): Branch or commit-ish to analyze (defaults to "HEAD").
+                        
+                        Returns:
+                            pandas.DataFrame: One row per commit with columns:
+                                - hash: short (8-char) commit hash
+                                - full_hash: full commit hash
+                                - author: author name
+                                - author_email: author email
+                                - date: commit datetime (timezone removed)
+                                - message: commit message (decoded and trimmed)
+                                - files_changed: number of files changed in the commit
+                                - insertions: number of inserted lines
+                                - deletions: number of deleted lines
+                                - lines_changed: sum of insertions and deletions
+                        """
         commits_data = []
         
         # 设置时间范围
@@ -275,15 +292,23 @@ class GitAnalyzer:
                        since_date: Optional[datetime] = None,
                        until_date: Optional[datetime] = None) -> pd.DataFrame:
         """
-        获取合并统计信息
-        
-        Args:
-            since_date: 开始日期
-            until_date: 结束日期
-            
-        Returns:
-            包含合并信息的DataFrame
-        """
+                       Collect statistics about merge commits in the repository within an optional date range.
+                       
+                       Parameters:
+                           since_date (Optional[datetime]): Include merges on or after this date. If omitted, no lower bound is applied.
+                           until_date (Optional[datetime]): Include merges on or before this date. If omitted, no upper bound is applied.
+                       
+                       Returns:
+                           pd.DataFrame: Rows describe merge commits with columns:
+                               - hash: short (8-char) commit hash
+                               - full_hash: full commit hash
+                               - author: commit author name
+                               - date: commit date (timezone removed)
+                               - message: normalized commit message (decoded and stripped)
+                               - source_branch: branch name parsed from the merge message or "unknown"
+                               - target_branch: branch name parsed from the merge message or "unknown"
+                               - parents_count: number of parent commits
+                       """
         merge_data = []
         
         # 设置时间范围
@@ -536,10 +561,29 @@ class GitAnalyzer:
     
     def get_branch_graph_data(self) -> dict:
         """
-        获取分支关系图数据
+        Builds structured data representing the repository's branch and commit graph for visualization or analysis.
         
         Returns:
-            包含分支关系图信息的字典
+            dict: A dictionary with four top-level keys:
+                - nodes (list): Reserved for node-style graph entries (currently unused; may be populated by callers).
+                - edges (list): List of edge objects connecting commits. Each edge contains:
+                    - source (str): Short (8-char) hash of the parent commit.
+                    - target (str): Short (8-char) hash of the child commit.
+                    - type (str): Relationship type (e.g., "parent_child").
+                - commits (list): Chronologically sorted (newest first) list of commit summaries. Each entry contains:
+                    - hash (str): Short (8-char) commit hash.
+                    - full_hash (str): Full commit hash.
+                    - author (str): Commit author's name.
+                    - date (datetime): Commit timestamp with timezone removed.
+                    - message (str): Truncated commit message for display (at most ~50 characters, with "..." if truncated).
+                    - branches (list): Names of branches that include this commit (may be multiple).
+                    - parents (list): List of parent commit full hashes.
+                    - is_merge (bool): True if the commit has more than one parent.
+                - branches (list): List of branch summaries. Each entry contains:
+                    - name (str): Branch name.
+                    - last_commit (str): Short (8-char) hash of the branch tip.
+                    - commits_count (int): Number of recent commits counted for the branch.
+                    - is_active (bool): True if the branch is the repository's active branch.
         """
         graph_data = {
             'nodes': [],
@@ -662,13 +706,27 @@ class GitAnalyzer:
     
     def _analyze_merge_commit(self, commit) -> dict:
         """
-        分析合并提交的详细信息
+        Extracts detailed metadata and statistics from a merge commit.
         
-        Args:
-            commit: Git提交对象
-            
+        Parameters:
+            commit (git.Commit): The merge commit object to analyze.
+        
         Returns:
-            合并信息字典
+            dict or None: A dictionary with the following keys on success:
+                - hash (str): Short commit hash (8 chars).
+                - full_hash (str): Full commit hash.
+                - author (str): Commit author's name.
+                - date (datetime): Commit timestamp with timezone removed.
+                - message (str): Commit message (truncated to 100 characters if longer).
+                - source_branch (str): Inferred source branch name or "unknown".
+                - target_branch (str): Inferred target branch name or "unknown".
+                - parents_count (int): Number of parent commits.
+                - parents_info (list): List of parent summaries; each item is a dict with 'hash', 'author', and truncated 'message'.
+                - files_changed (int): Number of files changed in the merge (0 if unavailable).
+                - insertions (int): Number of inserted lines in the merge (0 if unavailable).
+                - deletions (int): Number of deleted lines in the merge (0 if unavailable).
+                - merge_type (str): Classification of the merge (e.g., "Pull Request", "Feature Branch", etc.).
+            Returns None if the commit cannot be analyzed.
         """
         try:
             # 确保日期是datetime对象

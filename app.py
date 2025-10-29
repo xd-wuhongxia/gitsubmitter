@@ -21,7 +21,11 @@ import json
 
 
 def init_page_config():
-    """初始化页面配置"""
+    """
+    Configure the Streamlit page for the application.
+    
+    Sets the page title to "Git统计分析仪表板", the page icon to a chart emoji, uses a wide layout, and sets the sidebar to be expanded by default.
+    """
     st.set_page_config(
         page_title="Git统计分析仪表板",
         page_icon="📊",
@@ -146,13 +150,15 @@ def normalize_remote_url(repo_input: str) -> str:
 
 def validate_git_repo(repo_path: str) -> tuple[bool, str]:
     """
-    验证Git仓库路径（支持本地和远程）
+    Determine whether a given path refers to a valid local or remote Git repository.
     
-    Args:
-        repo_path: 仓库路径或URL
-        
+    Checks empty input, recognizes remote repository URLs or shorthand (returns a normalized remote indicator), and for local paths verifies existence, that the path is a directory, and that it is a valid Git repository.
+    
+    Parameters:
+        repo_path (str): Local filesystem path or remote repository URL/shorthand.
+    
     Returns:
-        (是否有效, 错误消息)
+        tuple[bool, str]: (is_valid, message) where `is_valid` is True when the input is a recognized remote repository or a valid local Git repository; `message` is a human-readable status or error description.
     """
     try:
         if not repo_path or repo_path.strip() == "":
@@ -187,14 +193,28 @@ def validate_git_repo(repo_path: str) -> tuple[bool, str]:
 
 
 def get_repo_history_manager() -> RepoHistoryManager:
-    """获取仓库历史管理器实例"""
+    """
+    Retrieve the RepoHistoryManager instance from Streamlit session state, creating and storing one if it does not exist.
+    
+    Returns:
+        RepoHistoryManager: The repository history manager instance held in session state.
+    """
     if 'repo_history_manager' not in st.session_state:
         st.session_state.repo_history_manager = RepoHistoryManager()
     return st.session_state.repo_history_manager
 
 
 def get_code_review_config() -> Dict:
-    """获取Code Review配置"""
+    """
+    Load or initialize the Code Review configuration for the application.
+    
+    If a configuration is present in the Streamlit session state it is returned; otherwise the function attempts to load configuration from a local file named `code_review_config.json`. If the file is missing or cannot be parsed, a default configuration is created and returned.
+    
+    Returns:
+        Dict: Configuration dictionary containing at least:
+            - `keywords` (List[str]): review-related keywords to detect in commits/PRs.
+            - `enabled` (bool): whether Code Review analysis is enabled.
+    """
     if 'code_review_config' not in st.session_state:
         # 尝试从文件加载
         config_file = 'code_review_config.json'
@@ -216,7 +236,15 @@ def get_code_review_config() -> Dict:
 
 
 def save_code_review_config(config: Dict) -> bool:
-    """保存Code Review配置"""
+    """
+    Save the code review configuration to disk and update Streamlit session state.
+    
+    Parameters:
+        config (Dict): Code review configuration dictionary (e.g., contains `keywords` list and `enabled` flag).
+    
+    Returns:
+        bool: `True` if the configuration was written to `code_review_config.json` and session state was updated, `False` otherwise.
+    """
     try:
         config_file = 'code_review_config.json'
         with open(config_file, 'w', encoding='utf-8') as f:
@@ -229,7 +257,12 @@ def save_code_review_config(config: Dict) -> bool:
 
 
 def get_recent_repos() -> list:
-    """获取最近使用的仓库列表"""
+    """
+    Retrieve the list of recently used repository paths.
+    
+    Returns:
+        list: A list of repository path strings from the recent history. If no history exists, adds the current directory "." to history and returns it.
+    """
     history_manager = get_repo_history_manager()
     recent_repos = history_manager.get_recent_repos()
     
@@ -243,13 +276,31 @@ def get_recent_repos() -> list:
 
 
 def add_to_recent_repos(repo_path: str):
-    """添加仓库到最近使用列表"""
+    """
+    Add the given repository (local path or remote URL) to the recent-repositories history.
+    
+    Parameters:
+        repo_path (str): Local filesystem path or remote repository URL to record in recent history.
+    """
     history_manager = get_repo_history_manager()
     history_manager.add_repo(repo_path)
 
 
 def sidebar_controls():
-    """侧边栏控件"""
+    """
+    Render the Streamlit sidebar controls for repository selection and analysis configuration.
+    
+    Renders inputs to choose a repository (manual entry, recent history, or file browse), validates the selected repository (local or remote), shows a repository preview, and provides controls for time range, branch selection, and analysis options.
+    
+    Returns:
+        config (dict): Selected configuration with keys:
+            - repo_path (str): Local path or remote repository identifier/URL to analyze.
+            - start_date (datetime.date | None): Start date for the analysis range, or None for all time.
+            - end_date (datetime.date | None): End date for the analysis range, or None for all time.
+            - branch (str): Branch name or ref to analyze (default "HEAD").
+            - show_merge_commits (bool): Whether to include merge commits in analyses.
+            - show_file_stats (bool): Whether to compute and display file-level statistics.
+    """
     st.sidebar.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
     st.sidebar.markdown("### 📁 Git仓库选择")
     
@@ -529,7 +580,16 @@ def display_overview_metrics(analyzer: GitAnalyzer, config: dict):
 
 
 def display_commit_analysis(commits_df: pd.DataFrame, visualizer: GitVisualizer):
-    """显示提交分析"""
+    """
+    Render commit timeline and a table of recent commits for visual analysis.
+    
+    Displays a commit timeline visualization (when data is present) and a table of the most recent commits. If the provided commit data is empty, a warning is shown and no visualizations are produced.
+    
+    Parameters:
+        commits_df (pd.DataFrame): Commit records containing at least the columns
+            `hash`, `author`, `date` (datetime-like), `message`, `files_changed`, and `lines_changed`.
+        visualizer (GitVisualizer): Visualizer instance used to produce the commit timeline plot.
+    """
     st.markdown("## 🔍 提交分析")
     
     if commits_df.empty:
@@ -702,7 +762,15 @@ def display_branch_analysis(analyzer: GitAnalyzer, visualizer: GitVisualizer):
 
 
 def display_branch_graph_analysis(analyzer: GitAnalyzer, visualizer: GitVisualizer):
-    """显示分支关系图分析"""
+    """
+    Render a branch relationship network view and a table of recent branch commits.
+    
+    Displays overview metrics (commit nodes, relationship edges, merge commit count, and branch count), a branch network graph visualization, and a table of recent commit nodes with hash, author, date, message, branches, and commit type.
+    
+    Parameters:
+        analyzer (GitAnalyzer): Provides branch graph data.
+        visualizer (GitVisualizer): Produces the network graph visualization.
+    """
     st.markdown("## 🌐 分支关系图")
     
     try:
@@ -760,7 +828,14 @@ def display_branch_graph_analysis(analyzer: GitAnalyzer, visualizer: GitVisualiz
 
 
 def clean_message_for_display(message: str) -> str:
-    """清理消息中的emoji和特殊Unicode字符，确保在所有环境下正确显示"""
+    """
+    Remove emoji, decorative, and zero-width Unicode characters from a message for safe display.
+    
+    Normalizes whitespace and returns the cleaned string.
+    
+    Returns:
+        cleaned_message (str): The input converted to a string if necessary, with emoji, decorative Unicode ranges, and zero-width characters removed, and internal whitespace collapsed.
+    """
     import re
     
     if not isinstance(message, str):
@@ -785,7 +860,15 @@ def clean_message_for_display(message: str) -> str:
 
 
 def display_code_review_analysis(analyzer: GitAnalyzer, config: dict):
-    """显示Code Review统计分析"""
+    """
+    Render the Code Review statistics UI and analysis based on commit messages.
+    
+    Displays an interactive configuration expander for managing review keywords and an enabled flag, analyzes commits in the configured repository/timeframe for occurrences of those keywords, and presents overview metrics, keyword occurrence counts, per-author review counts, recent review records, and a review trend chart when available.
+    
+    Parameters:
+        analyzer (GitAnalyzer): Analyzer instance associated with the repository.
+        config (dict): Runtime configuration containing at minimum 'repo_path', 'start_date', 'end_date', and 'branch'.
+    """
     st.markdown("## 🔍 Code Review 统计")
     
     # 获取Code Review配置
@@ -1011,7 +1094,11 @@ def display_code_review_analysis(analyzer: GitAnalyzer, config: dict):
 
 
 def display_merge_direction_analysis(analyzer: GitAnalyzer, visualizer: GitVisualizer):
-    """显示合并方向历史分析"""
+    """
+    Render a set of visualizations and tables that summarize the repository's merge-direction history.
+    
+    Fetches merge-direction history from the analyzer and, if present, displays overview metrics (total merges, participating authors, involved branches, average files changed), a branch-merge flow (Sankey-like) visualization, a merge timeline, aggregate merge statistics, and a table of recent merges with formatted timestamp and a `code_changes` column showing insertions/deletions. If no merge history is found, an informational message is shown. On error, an error message is reported through Streamlit.
+    """
     st.markdown("## 🔀 合并方向历史")
     
     try:
@@ -1081,7 +1168,11 @@ def display_merge_direction_analysis(analyzer: GitAnalyzer, visualizer: GitVisua
 
 
 def main():
-    """主函数"""
+    """
+    Initialize and run the Streamlit Git statistics dashboard.
+    
+    Sets page configuration and styles, renders the sidebar controls to obtain user configuration, validates and prepares the selected repository (local or remote), initializes analyzers and visualizers, displays repository status and overview metrics, and constructs the main analysis tabs (commit, author, time, merge, file, branch, branch graph, merge direction history, code review, and MR management). Handles validation failures and runtime errors by presenting user-facing guidance and troubleshooting messages.
+    """
     # 初始化页面
     init_page_config()
     load_custom_css()
@@ -1277,7 +1368,19 @@ def main():
 
 
 def display_mr_management(analyzer, config):
-    """显示MR管理页面"""
+    """
+    Render the Merge Request (MR) management interface and handle MR-related operations.
+    
+    Displays GitHub connection setup, repository selection, PR fetching and processing, PR list with details,
+    and interactive actions (approve/reject/comment). Persists MR and operation data to the MRDatabase and
+    reads/writes recent remote repository history.
+    
+    Parameters:
+        analyzer: GitAnalyzer
+            Analyzer instance used elsewhere in the app (not required for core MR operations but available for integrations).
+        config: dict
+            UI/configuration dictionary from the sidebar (contains date range, branch, and other user-selected options).
+    """
     st.markdown("### 🔄 Merge Request 管理")
     
     # GitHub配置检查
