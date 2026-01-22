@@ -1076,6 +1076,261 @@ def display_merge_direction_analysis(analyzer: GitAnalyzer, visualizer: GitVisua
         st.error(f"合并方向分析出错: {str(e)}")
 
 
+def display_file_tree_analysis(analyzer: GitAnalyzer, config: dict):
+    """显示文件树和文件历史分析"""
+    st.markdown("## 🌲 代码文件树")
+    
+    try:
+        # 获取文件树
+        file_tree = analyzer.get_file_tree(config.get('branch', 'HEAD'))
+        all_files = analyzer.get_all_files(config.get('branch', 'HEAD'))
+        
+        if not all_files:
+            st.info("未能获取仓库文件列表")
+            return
+        
+        # 显示概览统计
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("📄 总文件数", len(all_files))
+        
+        with col2:
+            total_size = sum(f.get('size', 0) for f in all_files)
+            if total_size > 1024 * 1024:
+                size_str = f"{total_size / (1024 * 1024):.2f} MB"
+            elif total_size > 1024:
+                size_str = f"{total_size / 1024:.2f} KB"
+            else:
+                size_str = f"{total_size} B"
+            st.metric("💾 总大小", size_str)
+        
+        with col3:
+            extensions = set(f['extension'] for f in all_files)
+            st.metric("📝 文件类型数", len(extensions))
+        
+        with col4:
+            directories = set(f['directory'] for f in all_files)
+            st.metric("📁 目录数", len(directories))
+        
+        # 文件类型分布
+        st.markdown("### 📊 文件类型分布")
+        ext_counts = {}
+        for f in all_files:
+            ext = f['extension']
+            ext_counts[ext] = ext_counts.get(ext, 0) + 1
+        
+        ext_df = pd.DataFrame([
+            {'扩展名': k, '文件数': v} 
+            for k, v in sorted(ext_counts.items(), key=lambda x: x[1], reverse=True)[:15]
+        ])
+        
+        if not ext_df.empty:
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                st.bar_chart(ext_df.set_index('扩展名'))
+            with col2:
+                st.dataframe(ext_df, use_container_width=True)
+        
+        st.markdown("---")
+        
+        # 文件树展示
+        st.markdown("### 🌲 文件树结构")
+        st.markdown("""
+        <div class="info-box">
+        💡 <strong>使用说明:</strong> 点击文件夹展开/折叠，选择文件查看其提交历史
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # 创建两列布局：左侧文件树，右侧文件历史
+        col_tree, col_history = st.columns([1, 2])
+        
+        with col_tree:
+            st.markdown("#### 📂 文件浏览器")
+            
+            # 使用session state存储展开状态和选中文件
+            if 'expanded_dirs' not in st.session_state:
+                st.session_state.expanded_dirs = set()
+            if 'selected_file' not in st.session_state:
+                st.session_state.selected_file = None
+            
+            def render_tree_item(item, depth=0):
+                """递归渲染文件树项目"""
+                indent = "&nbsp;" * (depth * 4)
+                
+                if item['type'] == 'directory':
+                    dir_path = item['path']
+                    is_expanded = dir_path in st.session_state.expanded_dirs
+                    
+                    # 目录图标
+                    icon = "📂" if is_expanded else "📁"
+                    child_count = len(item.get('children', []))
+                    
+                    # 创建可点击的目录
+                    if st.button(
+                        f"{icon} {item['name']} ({child_count})",
+                        key=f"dir_{dir_path}_{depth}",
+                        use_container_width=True
+                    ):
+                        if is_expanded:
+                            st.session_state.expanded_dirs.discard(dir_path)
+                        else:
+                            st.session_state.expanded_dirs.add(dir_path)
+                        st.rerun()
+                    
+                    # 如果展开，渲染子项
+                    if is_expanded:
+                        for child in item.get('children', []):
+                            render_tree_item(child, depth + 1)
+                else:
+                    # 文件
+                    ext = item.get('extension', '')
+                    # 根据扩展名选择图标
+                    if ext in ['.py']:
+                        icon = "🐍"
+                    elif ext in ['.js', '.ts', '.jsx', '.tsx']:
+                        icon = "📜"
+                    elif ext in ['.html', '.htm']:
+                        icon = "🌐"
+                    elif ext in ['.css', '.scss', '.sass']:
+                        icon = "🎨"
+                    elif ext in ['.json', '.yaml', '.yml', '.toml']:
+                        icon = "⚙️"
+                    elif ext in ['.md', '.txt', '.rst']:
+                        icon = "📝"
+                    elif ext in ['.jpg', '.jpeg', '.png', '.gif', '.svg']:
+                        icon = "🖼️"
+                    else:
+                        icon = "📄"
+                    
+                    # 文件大小
+                    size = item.get('size', 0)
+                    if size > 1024:
+                        size_str = f"{size/1024:.1f}KB"
+                    else:
+                        size_str = f"{size}B"
+                    
+                    is_selected = st.session_state.selected_file == item['path']
+                    button_type = "primary" if is_selected else "secondary"
+                    
+                    if st.button(
+                        f"{icon} {item['name']} ({size_str})",
+                        key=f"file_{item['path']}",
+                        use_container_width=True,
+                        type=button_type
+                    ):
+                        st.session_state.selected_file = item['path']
+                        st.rerun()
+            
+            # 渲染根目录
+            # 默认展开根目录
+            if "/" not in st.session_state.expanded_dirs:
+                st.session_state.expanded_dirs.add("/")
+            
+            for child in file_tree.get('children', []):
+                render_tree_item(child, 0)
+        
+        with col_history:
+            st.markdown("#### 📜 文件提交历史")
+            
+            selected_file = st.session_state.selected_file
+            
+            if selected_file:
+                st.markdown(f"**选中文件:** `{selected_file}`")
+                
+                # 获取文件历史
+                with st.spinner(f"正在加载 {selected_file} 的提交历史..."):
+                    file_history = analyzer.get_file_history(
+                        selected_file, 
+                        max_commits=50,
+                        since_date=config.get('start_date'),
+                        until_date=config.get('end_date')
+                    )
+                
+                if file_history:
+                    st.success(f"找到 {len(file_history)} 条提交记录")
+                    
+                    # 显示历史统计
+                    total_insertions = sum(h['insertions'] for h in file_history)
+                    total_deletions = sum(h['deletions'] for h in file_history)
+                    unique_authors = len(set(h['author'] for h in file_history))
+                    
+                    stat_col1, stat_col2, stat_col3 = st.columns(3)
+                    with stat_col1:
+                        st.metric("✏️ 修改次数", len(file_history))
+                    with stat_col2:
+                        st.metric("➕ 总增加行", total_insertions)
+                    with stat_col3:
+                        st.metric("➖ 总删除行", total_deletions)
+                    
+                    st.markdown(f"**👥 贡献者:** {unique_authors} 人")
+                    
+                    # 显示提交历史表格
+                    st.markdown("##### 提交记录")
+                    
+                    history_data = []
+                    for h in file_history:
+                        # 清理消息显示
+                        message = h['message']
+                        if len(message) > 60:
+                            message = message[:57] + "..."
+                        
+                        history_data.append({
+                            '提交': h['hash'],
+                            '作者': h['author'],
+                            '日期': h['date'].strftime('%Y-%m-%d %H:%M') if h['date'] else '',
+                            '变更': f"+{h['insertions']} -{h['deletions']}",
+                            '说明': message
+                        })
+                    
+                    history_df = pd.DataFrame(history_data)
+                    st.dataframe(history_df, use_container_width=True, height=400)
+                    
+                    # 显示作者贡献分布
+                    st.markdown("##### 作者贡献分布")
+                    author_commits = {}
+                    for h in file_history:
+                        author = h['author']
+                        author_commits[author] = author_commits.get(author, 0) + 1
+                    
+                    author_df = pd.DataFrame([
+                        {'作者': k, '提交数': v}
+                        for k, v in sorted(author_commits.items(), key=lambda x: x[1], reverse=True)
+                    ])
+                    
+                    if not author_df.empty:
+                        st.bar_chart(author_df.set_index('作者'))
+                    
+                else:
+                    st.info(f"未找到 {selected_file} 的提交历史")
+            else:
+                st.info("👈 请在左侧文件树中选择一个文件查看其提交历史")
+        
+        # 目录统计
+        st.markdown("---")
+        st.markdown("### 📁 目录统计")
+        
+        dir_stats = analyzer.get_directory_stats(config.get('branch', 'HEAD'))
+        
+        if dir_stats:
+            dir_data = []
+            for d in dir_stats[:20]:  # 显示前20个目录
+                dir_data.append({
+                    '目录': d['directory'],
+                    '文件数': d['file_count'],
+                    '大小': f"{d['total_size'] / 1024:.1f} KB" if d['total_size'] > 1024 else f"{d['total_size']} B",
+                    '主要类型': ', '.join(list(d['top_extensions'].keys())[:3])
+                })
+            
+            dir_df = pd.DataFrame(dir_data)
+            st.dataframe(dir_df, use_container_width=True)
+        
+    except Exception as e:
+        st.error(f"文件树分析出错: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
+
+
 def main():
     """主函数"""
     # 初始化页面
@@ -1213,10 +1468,10 @@ def main():
             )
         
         # 创建选项卡
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs([
             "📝 提交分析", "👥 作者分析", "⏰时间分析", 
             "🔀 合并分析", "📁 文件分析", "🌳 分支分析",
-            "🌐 分支关系图", "🔀 合并方向历史", "🔍 Code Review统计", "🔄 MR管理"
+            "🌐 分支关系图", "🔀 合并方向历史", "🌲 文件树", "🔍 Code Review统计", "🔄 MR管理"
         ])
         
         with tab1:
@@ -1244,9 +1499,12 @@ def main():
             display_merge_direction_analysis(analyzer, visualizer)
         
         with tab9:
-            display_code_review_analysis(analyzer, config)
+            display_file_tree_analysis(analyzer, config)
         
         with tab10:
+            display_code_review_analysis(analyzer, config)
+        
+        with tab11:
             display_mr_management(analyzer, config)
             
     except ValueError as e:
