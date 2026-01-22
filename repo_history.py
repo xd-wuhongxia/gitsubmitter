@@ -60,22 +60,33 @@ class RepoHistoryManager:
         Returns:
             'local' 或 'remote'
         """
-        # 检查是否是本地路径
-        if os.path.isabs(repo_path) or repo_path.startswith('.'):
+        # First check if path exists on disk (highest priority for local detection)
+        if os.path.exists(repo_path) or os.path.isdir(repo_path):
             return 'local'
         
-        # 检查是否是远程URL格式
+        # Check if it's clearly a filesystem path (absolute, starts with '.', or contains os.path.sep)
+        if os.path.isabs(repo_path) or repo_path.startswith('.') or os.path.sep in repo_path:
+            return 'local'
+        
+        # Check if it's a remote URL format
         remote_patterns = [
-            r'^https?://github\.com/',
-            r'^git@github\.com:',
-            r'^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$'  # owner/repo格式
+            r'^https?://',  # HTTP/HTTPS URLs
+            r'^git@',  # SSH URLs
+            r'^ssh://',  # SSH protocol URLs
         ]
         
         for pattern in remote_patterns:
             if re.match(pattern, repo_path):
                 return 'remote'
         
-        # 默认判断为本地
+        # Check for owner/repo format (GitHub shorthand) - only if it doesn't look like a local path
+        # Must have exactly one slash and no path separators
+        if re.match(r'^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$', repo_path):
+            # Additional check: if it looks like a relative path that could exist, treat as local
+            if not os.path.sep == '/' or '/' not in repo_path.replace('/', '', 1):
+                return 'remote'
+        
+        # Default to local
         return 'local'
     
     def _extract_repo_name(self, repo_path: str, repo_type: str) -> str:
@@ -121,6 +132,29 @@ class RepoHistoryManager:
             else:
                 return f"GitHub仓库 ({repo_path})"
     
+    def _normalize_path(self, repo_path: str, repo_type: str) -> str:
+        """
+        Normalize path for consistent storage and comparison.
+        
+        Args:
+            repo_path: Repository path
+            repo_type: Repository type ('local' or 'remote')
+            
+        Returns:
+            Normalized path string
+        """
+        if repo_type == 'local':
+            # Resolve to absolute path and normalize
+            try:
+                normalized = Path(repo_path).resolve().as_posix()
+                return normalized
+            except (OSError, ValueError):
+                # Fallback to original path if resolution fails
+                return repo_path
+        else:
+            # For remote repos, just return as-is (already normalized)
+            return repo_path
+    
     def add_repo(self, repo_path: str) -> bool:
         """
         添加仓库到历史记录
@@ -136,18 +170,25 @@ class RepoHistoryManager:
         
         repo_path = repo_path.strip()
         repo_type = self._detect_repo_type(repo_path)
-        repo_name = self._extract_repo_name(repo_path, repo_type)
-        description = self._generate_description(repo_path, repo_type)
         
-        # 检查是否已存在，如果存在则更新时间
+        # Normalize path to prevent duplicates (e.g., "." vs "/abs/path")
+        normalized_path = self._normalize_path(repo_path, repo_type)
+        
+        repo_name = self._extract_repo_name(repo_path, repo_type)
+        description = self._generate_description(normalized_path, repo_type)
+        
+        # Check for existing entry using normalized path comparison
         existing_index = -1
         for i, repo in enumerate(self.history_data["recent_repos"]):
-            if repo["path"] == repo_path:
+            stored_path = repo["path"]
+            stored_type = repo.get("type", self._detect_repo_type(stored_path))
+            stored_normalized = self._normalize_path(stored_path, stored_type)
+            if stored_normalized == normalized_path:
                 existing_index = i
                 break
         
         repo_record = {
-            "path": repo_path,
+            "path": normalized_path,
             "type": repo_type,
             "name": repo_name,
             "description": description,
@@ -189,8 +230,8 @@ class RepoHistoryManager:
                 last_used = datetime.fromisoformat(repo["last_used"])
                 if last_used >= cutoff_date:
                     valid_repos.append(repo)
-            except:
-                # 如果日期解析失败，保留记录但更新时间
+            except (ValueError, KeyError, TypeError):
+                # If date parsing fails, keep the record but update the time
                 repo["last_used"] = datetime.now().isoformat()
                 valid_repos.append(repo)
         

@@ -2,14 +2,18 @@
 Git提交历史统计分析 Streamlit 应用
 """
 
-import streamlit as st
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta, date
+import json
+import logging
 import os
+import re
+from datetime import datetime, timedelta, date
 from pathlib import Path
-import git
 from typing import Dict, List, Optional
+
+import git
+import numpy as np
+import pandas as pd
+import streamlit as st
 
 # 导入自定义模块
 from git_analyzer import GitAnalyzer
@@ -17,7 +21,6 @@ from visualizations import GitVisualizer
 from mr_database import MRDatabase
 from github_integration import GitHubIntegration
 from repo_history import RepoHistoryManager
-import json
 
 
 def init_page_config():
@@ -196,22 +199,17 @@ def get_repo_history_manager() -> RepoHistoryManager:
 def get_code_review_config() -> Dict:
     """获取Code Review配置"""
     if 'code_review_config' not in st.session_state:
-        # 尝试从文件加载
         config_file = 'code_review_config.json'
-        if os.path.exists(config_file):
-            try:
-                with open(config_file, 'r', encoding='utf-8') as f:
-                    st.session_state.code_review_config = json.load(f)
-            except:
-                st.session_state.code_review_config = {
-                    'keywords': ['pr-agent', 'codiumai-pr-agent', 'github-actions[bot]'],
-                    'enabled': True
-                }
-        else:
-            st.session_state.code_review_config = {
-                'keywords': ['pr-agent', 'codiumai-pr-agent', 'github-actions[bot]'],
-                'enabled': True
-            }
+        default_config = {
+            'keywords': ['pr-agent', 'codiumai-pr-agent', 'github-actions[bot]'],
+            'enabled': True
+        }
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                st.session_state.code_review_config = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError, IOError, OSError) as e:
+            logging.warning(f"Failed to load code review config: {e}")
+            st.session_state.code_review_config = default_config
     return st.session_state.code_review_config
 
 
@@ -223,8 +221,8 @@ def save_code_review_config(config: Dict) -> bool:
             json.dump(config, f, indent=2, ensure_ascii=False)
         st.session_state.code_review_config = config
         return True
-    except Exception as e:
-        st.error(f"保存配置失败: {str(e)}")
+    except (IOError, OSError) as e:
+        st.error(f"保存配置失败: {e}")
         return False
 
 
@@ -761,8 +759,6 @@ def display_branch_graph_analysis(analyzer: GitAnalyzer, visualizer: GitVisualiz
 
 def clean_message_for_display(message: str) -> str:
     """清理消息中的emoji和特殊Unicode字符，确保在所有环境下正确显示"""
-    import re
-    
     if not isinstance(message, str):
         message = str(message)
     

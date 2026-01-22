@@ -55,3 +55,7 @@ Desktop.ini
 .streamlit/secrets.toml
 .streamlit/config.toml
 
+# App/state data
+repo_history.json
+.env
+.env.local
