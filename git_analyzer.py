@@ -34,6 +34,16 @@ class GitAnalyzer:
             else:
                 # 处理本地仓库
                 self.repo = git.Repo(repo_path)
+            
+            # 设置Git配置以正确处理UTF-8编码
+            try:
+                with self.repo.config_writer() as git_config:
+                    git_config.set_value('i18n', 'commitEncoding', 'utf-8')
+                    git_config.set_value('i18n', 'logOutputEncoding', 'utf-8')
+            except Exception:
+                # 如果配置写入失败，继续执行（某些只读仓库可能会失败）
+                pass
+                
         except git.exc.InvalidGitRepositoryError:
             raise ValueError(f"路径 {repo_path} 不是有效的Git仓库")
         except Exception as e:
@@ -236,13 +246,23 @@ class GitAnalyzer:
                 # 移除时区信息以避免兼容性问题
                 commit_date = commit_date.replace(tzinfo=None)
             
+            # 处理commit message的编码
+            try:
+                # 尝试获取正确编码的message
+                if isinstance(commit.message, bytes):
+                    message = commit.message.decode('utf-8', errors='replace').strip()
+                else:
+                    message = commit.message.strip()
+            except Exception:
+                message = str(commit.message).strip()
+            
             commits_data.append({
                 'hash': commit.hexsha[:8],
                 'full_hash': commit.hexsha,
                 'author': commit.author.name,
                 'author_email': commit.author.email,
                 'date': commit_date,
-                'message': commit.message.strip(),
+                'message': message,
                 'files_changed': stats['files'],
                 'insertions': stats['insertions'],
                 'deletions': stats['deletions'],
@@ -281,9 +301,18 @@ class GitAnalyzer:
         for commit in commits:
             # 检查是否是合并提交（有多个父提交）
             if len(commit.parents) > 1:
+                # 处理commit message的编码
+                try:
+                    if isinstance(commit.message, bytes):
+                        message = commit.message.decode('utf-8', errors='replace').strip()
+                    else:
+                        message = commit.message.strip()
+                except Exception:
+                    message = str(commit.message).strip()
+                
                 # 解析合并信息
                 merge_pattern = r"Merge.*?(\w+).*?into.*?(\w+)"
-                match = re.search(merge_pattern, commit.message, re.IGNORECASE)
+                match = re.search(merge_pattern, message, re.IGNORECASE)
                 
                 source_branch = "unknown"
                 target_branch = "unknown"
@@ -302,7 +331,7 @@ class GitAnalyzer:
                     'full_hash': commit.hexsha,
                     'author': commit.author.name,
                     'date': commit_date,
-                    'message': commit.message.strip(),
+                    'message': message,
                     'source_branch': source_branch,
                     'target_branch': target_branch,
                     'parents_count': len(commit.parents)
@@ -546,12 +575,24 @@ class GitAnalyzer:
                     if hasattr(commit_date, 'replace'):
                         commit_date = commit_date.replace(tzinfo=None)
                     
+                    # 处理commit message的编码
+                    try:
+                        if isinstance(commit.message, bytes):
+                            message = commit.message.decode('utf-8', errors='replace').strip()
+                        else:
+                            message = commit.message.strip()
+                    except Exception:
+                        message = str(commit.message).strip()
+                    
+                    # 截断长消息
+                    display_message = message[:50] + '...' if len(message) > 50 else message
+                    
                     graph_data['commits'].append({
                         'hash': commit.hexsha[:8],
                         'full_hash': commit.hexsha,
                         'author': commit.author.name,
                         'date': commit_date,
-                        'message': commit.message.strip()[:50] + '...' if len(commit.message.strip()) > 50 else commit.message.strip(),
+                        'message': display_message,
                         'branches': branch_names,
                         'parents': [p.hexsha for p in commit.parents],
                         'is_merge': len(commit.parents) > 1
@@ -635,8 +676,15 @@ class GitAnalyzer:
             if hasattr(commit_date, 'replace'):
                 commit_date = commit_date.replace(tzinfo=None)
             
-            # 解析合并消息
-            message = commit.message.strip()
+            # 处理commit message的编码
+            try:
+                if isinstance(commit.message, bytes):
+                    message = commit.message.decode('utf-8', errors='replace').strip()
+                else:
+                    message = commit.message.strip()
+            except Exception:
+                message = str(commit.message).strip()
+            
             source_branch = "unknown"
             target_branch = "unknown"
             
@@ -662,10 +710,21 @@ class GitAnalyzer:
             # 获取父提交信息
             parents_info = []
             for i, parent in enumerate(commit.parents):
+                # 处理父提交message的编码
+                try:
+                    if isinstance(parent.message, bytes):
+                        parent_message = parent.message.decode('utf-8', errors='replace').strip()
+                    else:
+                        parent_message = parent.message.strip()
+                except Exception:
+                    parent_message = str(parent.message).strip()
+                
+                display_parent_message = parent_message[:30] + '...' if len(parent_message) > 30 else parent_message
+                
                 parents_info.append({
                     'hash': parent.hexsha[:8],
                     'author': parent.author.name,
-                    'message': parent.message.strip()[:30] + '...' if len(parent.message.strip()) > 30 else parent.message.strip()
+                    'message': display_parent_message
                 })
             
             # 计算合并统计 - 处理浅克隆问题
@@ -722,3 +781,222 @@ class GitAnalyzer:
             return 'Development Branch'
         else:
             return 'Regular Merge'
+    
+    def get_file_tree(self, branch: str = "HEAD") -> Dict:
+        """
+        获取仓库文件树结构
+        
+        Args:
+            branch: 分支名称
+            
+        Returns:
+            树形结构字典，包含文件和目录信息
+        """
+        try:
+            commit = self.repo.commit(branch)
+            tree = commit.tree
+            
+            def build_tree(tree_obj, path=""):
+                """递归构建文件树"""
+                result = {
+                    "name": os.path.basename(path) if path else "/",
+                    "path": path or "/",
+                    "type": "directory",
+                    "children": []
+                }
+                
+                for item in tree_obj:
+                    item_path = f"{path}/{item.name}" if path else item.name
+                    
+                    if item.type == "tree":
+                        # 目录
+                        child = build_tree(item, item_path)
+                        result["children"].append(child)
+                    else:
+                        # 文件
+                        file_info = {
+                            "name": item.name,
+                            "path": item_path,
+                            "type": "file",
+                            "size": item.size,
+                            "extension": os.path.splitext(item.name)[1] or "no_ext",
+                            "mode": oct(item.mode)
+                        }
+                        result["children"].append(file_info)
+                
+                # 排序：目录在前，文件在后，各自按名称排序
+                result["children"].sort(key=lambda x: (0 if x["type"] == "directory" else 1, x["name"].lower()))
+                
+                return result
+            
+            return build_tree(tree)
+            
+        except Exception as e:
+            return {"name": "/", "path": "/", "type": "directory", "children": [], "error": str(e)}
+    
+    def get_all_files(self, branch: str = "HEAD") -> List[Dict]:
+        """
+        获取仓库中所有文件的扁平列表
+        
+        Args:
+            branch: 分支名称
+            
+        Returns:
+            文件信息列表
+        """
+        files = []
+        
+        try:
+            commit = self.repo.commit(branch)
+            tree = commit.tree
+            
+            def traverse_tree(tree_obj, path=""):
+                for item in tree_obj:
+                    item_path = f"{path}/{item.name}" if path else item.name
+                    
+                    if item.type == "tree":
+                        traverse_tree(item, item_path)
+                    else:
+                        files.append({
+                            "name": item.name,
+                            "path": item_path,
+                            "size": item.size,
+                            "extension": os.path.splitext(item.name)[1] or "no_ext",
+                            "directory": path or "/"
+                        })
+            
+            traverse_tree(tree)
+            
+        except Exception as e:
+            pass
+        
+        return files
+    
+    def get_file_history(self, file_path: str, max_commits: int = 50, 
+                         since_date: Optional[datetime] = None,
+                         until_date: Optional[datetime] = None) -> List[Dict]:
+        """
+        获取指定文件的提交历史
+        
+        Args:
+            file_path: 文件路径
+            max_commits: 最大返回提交数
+            since_date: 开始日期
+            until_date: 结束日期
+            
+        Returns:
+            提交历史列表
+        """
+        history = []
+        
+        try:
+            # 构建git log参数
+            kwargs = {'paths': file_path, 'max_count': max_commits}
+            if since_date:
+                kwargs['since'] = since_date
+            if until_date:
+                kwargs['until'] = until_date
+            
+            commits = list(self.repo.iter_commits("HEAD", **kwargs))
+            
+            for commit in commits:
+                # 处理commit message的编码
+                try:
+                    if isinstance(commit.message, bytes):
+                        message = commit.message.decode('utf-8', errors='replace').strip()
+                    else:
+                        message = commit.message.strip()
+                except Exception:
+                    message = str(commit.message).strip()
+                
+                # 获取该提交中此文件的变更统计
+                file_stats = {'insertions': 0, 'deletions': 0, 'lines': 0}
+                try:
+                    stats = commit.stats.files.get(file_path, {})
+                    file_stats['insertions'] = stats.get('insertions', 0)
+                    file_stats['deletions'] = stats.get('deletions', 0)
+                    file_stats['lines'] = stats.get('lines', file_stats['insertions'] + file_stats['deletions'])
+                except Exception:
+                    pass
+                
+                # 确保日期是datetime对象
+                commit_date = commit.committed_datetime
+                if hasattr(commit_date, 'replace'):
+                    commit_date = commit_date.replace(tzinfo=None)
+                
+                history.append({
+                    'hash': commit.hexsha[:8],
+                    'full_hash': commit.hexsha,
+                    'author': commit.author.name,
+                    'author_email': commit.author.email,
+                    'date': commit_date,
+                    'message': message,
+                    'insertions': file_stats['insertions'],
+                    'deletions': file_stats['deletions'],
+                    'lines_changed': file_stats['lines']
+                })
+                
+        except Exception as e:
+            pass
+        
+        return history
+    
+    def get_file_content(self, file_path: str, commit_hash: str = "HEAD") -> Optional[str]:
+        """
+        获取指定提交中文件的内容
+        
+        Args:
+            file_path: 文件路径
+            commit_hash: 提交哈希值
+            
+        Returns:
+            文件内容字符串，如果无法获取则返回None
+        """
+        try:
+            commit = self.repo.commit(commit_hash)
+            blob = commit.tree / file_path
+            
+            # 尝试解码文件内容
+            try:
+                content = blob.data_stream.read().decode('utf-8', errors='replace')
+                return content
+            except Exception:
+                return None
+                
+        except Exception:
+            return None
+    
+    def get_directory_stats(self, branch: str = "HEAD") -> List[Dict]:
+        """
+        获取目录级别的统计信息
+        
+        Args:
+            branch: 分支名称
+            
+        Returns:
+            目录统计列表
+        """
+        dir_stats = defaultdict(lambda: {
+            'file_count': 0,
+            'total_size': 0,
+            'extensions': Counter()
+        })
+        
+        files = self.get_all_files(branch)
+        
+        for file_info in files:
+            directory = file_info['directory']
+            dir_stats[directory]['file_count'] += 1
+            dir_stats[directory]['total_size'] += file_info.get('size', 0)
+            dir_stats[directory]['extensions'][file_info['extension']] += 1
+        
+        result = []
+        for dir_path, stats in dir_stats.items():
+            result.append({
+                'directory': dir_path,
+                'file_count': stats['file_count'],
+                'total_size': stats['total_size'],
+                'top_extensions': dict(stats['extensions'].most_common(5))
+            })
+        
+        return sorted(result, key=lambda x: x['file_count'], reverse=True)

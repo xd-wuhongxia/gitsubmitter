@@ -2,19 +2,25 @@
 Git提交历史统计分析 Streamlit 应用
 """
 
-import streamlit as st
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta, date
+import json
+import logging
 import os
+import re
+from datetime import datetime, timedelta, date
 from pathlib import Path
+from typing import Dict, List, Optional
+
 import git
+import numpy as np
+import pandas as pd
+import streamlit as st
 
 # 导入自定义模块
 from git_analyzer import GitAnalyzer
 from visualizations import GitVisualizer
 from mr_database import MRDatabase
 from github_integration import GitHubIntegration
+from repo_history import RepoHistoryManager
 
 
 def init_page_config():
@@ -183,44 +189,61 @@ def validate_git_repo(repo_path: str) -> tuple[bool, str]:
         return False, f"验证路径时出错: {str(e)}"
 
 
+def get_repo_history_manager() -> RepoHistoryManager:
+    """获取仓库历史管理器实例"""
+    if 'repo_history_manager' not in st.session_state:
+        st.session_state.repo_history_manager = RepoHistoryManager()
+    return st.session_state.repo_history_manager
+
+
+def get_code_review_config() -> Dict:
+    """获取Code Review配置"""
+    if 'code_review_config' not in st.session_state:
+        config_file = 'code_review_config.json'
+        default_config = {
+            'keywords': ['pr-agent', 'codiumai-pr-agent', 'github-actions[bot]'],
+            'enabled': True
+        }
+        try:
+            with open(config_file, 'r', encoding='utf-8') as f:
+                st.session_state.code_review_config = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError, IOError, OSError) as e:
+            logging.warning(f"Failed to load code review config: {e}")
+            st.session_state.code_review_config = default_config
+    return st.session_state.code_review_config
+
+
+def save_code_review_config(config: Dict) -> bool:
+    """保存Code Review配置"""
+    try:
+        config_file = 'code_review_config.json'
+        with open(config_file, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        st.session_state.code_review_config = config
+        return True
+    except (IOError, OSError) as e:
+        st.error(f"保存配置失败: {e}")
+        return False
+
+
 def get_recent_repos() -> list:
     """获取最近使用的仓库列表"""
-    # 从session state中获取最近使用的仓库
-    if 'recent_repos' not in st.session_state:
-        st.session_state.recent_repos = [
-            ".",
-            "..",
-        ]
+    history_manager = get_repo_history_manager()
+    recent_repos = history_manager.get_recent_repos()
     
-    # 添加一些常见路径（如果不存在）
-    common_paths = [
-        os.path.expanduser("~"),
-        "D:/",
-        "C:/",
-    ]
+    # 如果没有历史记录，添加一些默认选项
+    if not recent_repos:
+        # 添加当前目录作为默认选项
+        history_manager.add_repo(".")
+        recent_repos = history_manager.get_recent_repos()
     
-    recent_list = st.session_state.recent_repos.copy()
-    for path in common_paths:
-        if path not in recent_list and os.path.exists(path):
-            recent_list.append(path)
-    
-    return recent_list[:10]  # 最多显示10个
+    return [repo["path"] for repo in recent_repos]
 
 
 def add_to_recent_repos(repo_path: str):
     """添加仓库到最近使用列表"""
-    if 'recent_repos' not in st.session_state:
-        st.session_state.recent_repos = []
-    
-    # 移除已存在的相同路径
-    if repo_path in st.session_state.recent_repos:
-        st.session_state.recent_repos.remove(repo_path)
-    
-    # 添加到列表开头
-    st.session_state.recent_repos.insert(0, repo_path)
-    
-    # 保持列表长度不超过10
-    st.session_state.recent_repos = st.session_state.recent_repos[:10]
+    history_manager = get_repo_history_manager()
+    history_manager.add_repo(repo_path)
 
 
 def sidebar_controls():
@@ -255,12 +278,58 @@ def sidebar_controls():
         """, unsafe_allow_html=True)
     
     elif input_method == "📋 最近使用":
-        recent_repos = get_recent_repos()
-        repo_path = st.sidebar.selectbox(
-            "选择最近使用的仓库",
-            recent_repos,
-            help="从最近使用的仓库中选择"
-        )
+        history_manager = get_repo_history_manager()
+        recent_repos = history_manager.get_recent_repos()
+        
+        if recent_repos:
+            # 创建显示选项
+            display_options = []
+            repo_paths = []
+            
+            for repo in recent_repos:
+                display_name = history_manager.format_repo_display(repo)
+                display_options.append(display_name)
+                repo_paths.append(repo["path"])
+            
+            # 显示统计信息
+            stats = history_manager.get_stats()
+            st.sidebar.markdown(f"""
+            <div style="font-size: 0.8em; color: #666; margin-bottom: 10px;">
+            📊 共 {stats['total']} 个仓库 (📁 {stats['local']} 本地 + 🌐 {stats['remote']} 远程)
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # 选择框
+            selected_index = st.sidebar.selectbox(
+                "选择最近使用的仓库",
+                range(len(display_options)),
+                format_func=lambda i: display_options[i],
+                help="从最近使用的仓库中选择"
+            )
+            
+            repo_path = repo_paths[selected_index]
+            
+            # 管理按钮
+            col1, col2 = st.sidebar.columns(2)
+            with col1:
+                if st.button("🗑️ 删除", key="remove_repo", help="删除选中的仓库记录"):
+                    if history_manager.remove_repo(repo_path):
+                        st.success("✅ 已删除仓库记录")
+                        st.rerun()
+                    else:
+                        st.error("❌ 删除失败")
+            
+            with col2:
+                if st.button("🧹 清空", key="clear_history", help="清空所有仓库历史"):
+                    if history_manager.clear_history():
+                        st.success("✅ 已清空历史记录")
+                        st.rerun()
+                    else:
+                        st.error("❌ 清空失败")
+        else:
+            st.sidebar.info("📭 暂无最近使用的仓库")
+            st.sidebar.markdown("💡 使用其他方式选择仓库后，会自动添加到历史记录中")
+            repo_path = "."
     
     elif input_method == "📂 浏览选择":
         st.sidebar.info("💡 在下方输入框中输入要分析的仓库路径")
@@ -326,14 +395,9 @@ def sidebar_controls():
                 st.sidebar.warning(f"获取仓库预览失败: {str(e)}")
     
     # 快速操作按钮
-    col1, col2 = st.sidebar.columns(2)
-    with col1:
-        if st.button("🔄 刷新", help="重新加载当前仓库数据"):
-            st.rerun()
-    with col2:
-        if st.button("🗑️ 清除历史", help="清除最近使用的仓库历史"):
-            st.session_state.recent_repos = []
-            st.rerun()
+    # 刷新按钮
+    if st.sidebar.button("🔄 刷新", help="重新加载当前仓库数据"):
+        st.rerun()
     
     st.sidebar.markdown("---")
     st.sidebar.markdown("### ⚙️ 分析配置")
@@ -479,6 +543,8 @@ def display_commit_analysis(commits_df: pd.DataFrame, visualizer: GitVisualizer)
     st.markdown("### 最近提交")
     recent_commits = commits_df.head(10)[['hash', 'author', 'date', 'message', 'files_changed', 'lines_changed']].copy()
     recent_commits['date'] = recent_commits['date'].dt.strftime('%Y-%m-%d %H:%M')
+    # 清理message中的emoji字符
+    recent_commits['message'] = recent_commits['message'].apply(clean_message_for_display)
     st.dataframe(recent_commits, width='stretch')
 
 
@@ -691,6 +757,255 @@ def display_branch_graph_analysis(analyzer: GitAnalyzer, visualizer: GitVisualiz
         st.error(f"分支关系图分析出错: {str(e)}")
 
 
+def clean_message_for_display(message: str) -> str:
+    """清理消息中的emoji和特殊Unicode字符，确保在所有环境下正确显示"""
+    if not isinstance(message, str):
+        message = str(message)
+    
+    # 移除emoji和其他特殊Unicode字符 (U+1F000 到 U+1FFFF范围)
+    # 保留常见的中文、英文、标点符号等
+    cleaned = re.sub(r'[\U00010000-\U0010ffff]', '', message)
+    
+    # 移除其他常见的装饰性Unicode字符
+    cleaned = re.sub(r'[\u2600-\u27BF]', '', cleaned)  # 各种符号
+    cleaned = re.sub(r'[\uE000-\uF8FF]', '', cleaned)  # 私有使用区
+    cleaned = re.sub(r'[\uFE00-\uFE0F]', '', cleaned)  # 变体选择符
+    
+    # 移除零宽字符
+    cleaned = re.sub(r'[\u200B-\u200D\uFEFF]', '', cleaned)
+    
+    # 清理多余的空格和换行
+    cleaned = ' '.join(cleaned.split())
+    
+    return cleaned.strip()
+
+
+def display_code_review_analysis(analyzer: GitAnalyzer, config: dict):
+    """显示Code Review统计分析"""
+    st.markdown("## 🔍 Code Review 统计")
+    
+    # 获取Code Review配置
+    cr_config = get_code_review_config()
+    
+    # 配置部分
+    with st.expander("⚙️ Code Review 配置", expanded=False):
+        st.markdown("### 🤖 机器人关键词配置")
+        st.markdown("配置用于识别自动化Code Review的关键词（如机器人名称）")
+        
+        # 启用/禁用开关
+        enabled = st.checkbox(
+            "启用Code Review统计",
+            value=cr_config.get('enabled', True),
+            help="是否启用Code Review统计功能"
+        )
+        
+        # 关键词输入
+        keywords_text = st.text_area(
+            "关键词列表（每行一个）",
+            value='\n'.join(cr_config.get('keywords', [])),
+            height=100,
+            help="输入用于识别Code Review的关键词，如机器人名称、用户名等"
+        )
+        
+        # 示例关键词
+        st.markdown("""
+        **常见机器人关键词示例：**
+        - `pr-agent` - PR Agent 机器人
+        - `codiumai-pr-agent` - CodiumAI PR Agent
+        - `github-actions[bot]` - GitHub Actions 机器人
+        - `codecov` - Codecov 机器人
+        - `sonarcloud[bot]` - SonarCloud 机器人
+        """)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("💾 保存配置", type="primary"):
+                keywords = [k.strip() for k in keywords_text.split('\n') if k.strip()]
+                new_config = {
+                    'keywords': keywords,
+                    'enabled': enabled
+                }
+                if save_code_review_config(new_config):
+                    st.success("✅ 配置已保存！")
+                    st.rerun()
+        
+        with col2:
+            if st.button("🔄 重置为默认"):
+                default_config = {
+                    'keywords': ['pr-agent', 'codiumai-pr-agent', 'github-actions[bot]'],
+                    'enabled': True
+                }
+                if save_code_review_config(default_config):
+                    st.success("✅ 已重置为默认配置！")
+                    st.rerun()
+    
+    if not cr_config.get('enabled', True):
+        st.info("💡 Code Review统计功能已禁用，请在配置中启用")
+        return
+    
+    keywords = cr_config.get('keywords', [])
+    if not keywords:
+        st.warning("⚠️ 未配置任何关键词，请在配置中添加")
+        return
+    
+    try:
+        # 获取commit历史
+        commits_df = get_cached_commit_stats(
+            config['repo_path'],
+            config['start_date'],
+            config['end_date'],
+            config['branch']
+        )
+        
+        if commits_df.empty:
+            st.warning("暂无提交数据可供分析")
+            return
+        
+        # 分析commit message中的关键词
+        st.markdown("### 📊 统计概览")
+        st.markdown(f"**监控关键词**: {', '.join([f'`{k}`' for k in keywords])}")
+        
+        # 统计包含关键词的commit
+        review_stats = {
+            'total_commits': len(commits_df),
+            'reviewed_commits': 0,
+            'review_rate': 0.0,
+            'keyword_counts': {k: 0 for k in keywords},
+            'reviews_by_author': {},
+            'reviews_over_time': []
+        }
+        
+        # 分析每个commit
+        for _, commit in commits_df.iterrows():
+            message = str(commit.get('message', '')).lower()
+            author = commit.get('author', 'Unknown')
+            date = commit.get('date')
+            
+            # 检查是否包含任何关键词
+            has_review = False
+            for keyword in keywords:
+                if keyword.lower() in message:
+                    review_stats['keyword_counts'][keyword] += 1
+                    has_review = True
+            
+            if has_review:
+                review_stats['reviewed_commits'] += 1
+                
+                # 按作者统计
+                if author not in review_stats['reviews_by_author']:
+                    review_stats['reviews_by_author'][author] = 0
+                review_stats['reviews_by_author'][author] += 1
+                
+                # 时间序列统计
+                review_stats['reviews_over_time'].append({
+                    'date': date,
+                    'author': author,
+                    'message': commit.get('message', '')[:100]
+                })
+        
+        # 计算review率
+        if review_stats['total_commits'] > 0:
+            review_stats['review_rate'] = (review_stats['reviewed_commits'] / review_stats['total_commits']) * 100
+        
+        # 显示关键指标
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric(
+                label="📝 总提交数",
+                value=review_stats['total_commits']
+            )
+        
+        with col2:
+            st.metric(
+                label="✅ 已Review提交",
+                value=review_stats['reviewed_commits']
+            )
+        
+        with col3:
+            st.metric(
+                label="📈 Review覆盖率",
+                value=f"{review_stats['review_rate']:.1f}%"
+            )
+        
+        with col4:
+            total_reviews = sum(review_stats['keyword_counts'].values())
+            st.metric(
+                label="🔍 Review总数",
+                value=total_reviews
+            )
+        
+        # 关键词统计
+        st.markdown("### 🤖 关键词出现次数")
+        keyword_df = pd.DataFrame([
+            {'关键词': k, '出现次数': v, '占比': f"{(v/total_reviews*100):.1f}%" if total_reviews > 0 else "0%"}
+            for k, v in review_stats['keyword_counts'].items()
+        ]).sort_values('出现次数', ascending=False)
+        
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            # 使用bar chart显示
+            if not keyword_df.empty and total_reviews > 0:
+                st.bar_chart(keyword_df.set_index('关键词')['出现次数'])
+        
+        with col2:
+            st.dataframe(keyword_df, use_container_width=True, hide_index=True)
+        
+        # 按作者统计
+        if review_stats['reviews_by_author']:
+            st.markdown("### 👥 作者Review统计")
+            author_df = pd.DataFrame([
+                {'作者': author, 'Review次数': count}
+                for author, count in sorted(
+                    review_stats['reviews_by_author'].items(),
+                    key=lambda x: x[1],
+                    reverse=True
+                )
+            ])
+            
+            st.dataframe(author_df, use_container_width=True, hide_index=True)
+        
+        # 最近Review记录
+        if review_stats['reviews_over_time']:
+            st.markdown("### 📜 最近Review记录")
+            recent_reviews = sorted(
+                review_stats['reviews_over_time'],
+                key=lambda x: x['date'],
+                reverse=True
+            )[:20]
+            
+            review_display_df = pd.DataFrame([
+                {
+                    '时间': r['date'].strftime('%Y-%m-%d %H:%M') if hasattr(r['date'], 'strftime') else str(r['date']),
+                    '作者': r['author'],
+                    '提交信息': clean_message_for_display(r['message'])
+                }
+                for r in recent_reviews
+            ])
+            
+            st.dataframe(review_display_df, use_container_width=True, hide_index=True)
+        
+        # 趋势分析
+        if len(review_stats['reviews_over_time']) > 1:
+            st.markdown("### 📈 Review趋势分析")
+            st.info("💡 基于commit message中的关键词统计Review活动趋势")
+            
+            # 按日期聚合
+            review_dates = pd.DataFrame(review_stats['reviews_over_time'])
+            if not review_dates.empty and 'date' in review_dates.columns:
+                review_dates['date_only'] = pd.to_datetime(review_dates['date']).dt.date
+                daily_reviews = review_dates.groupby('date_only').size().reset_index(name='review_count')
+                daily_reviews.columns = ['日期', 'Review数量']
+                
+                st.line_chart(daily_reviews.set_index('日期'))
+        
+    except Exception as e:
+        st.error(f"Code Review分析出错: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
+
+
 def display_merge_direction_analysis(analyzer: GitAnalyzer, visualizer: GitVisualizer):
     """显示合并方向历史分析"""
     st.markdown("## 🔀 合并方向历史")
@@ -759,6 +1074,261 @@ def display_merge_direction_analysis(analyzer: GitAnalyzer, visualizer: GitVisua
         
     except Exception as e:
         st.error(f"合并方向分析出错: {str(e)}")
+
+
+def display_file_tree_analysis(analyzer: GitAnalyzer, config: dict):
+    """显示文件树和文件历史分析"""
+    st.markdown("## 🌲 代码文件树")
+    
+    try:
+        # 获取文件树
+        file_tree = analyzer.get_file_tree(config.get('branch', 'HEAD'))
+        all_files = analyzer.get_all_files(config.get('branch', 'HEAD'))
+        
+        if not all_files:
+            st.info("未能获取仓库文件列表")
+            return
+        
+        # 显示概览统计
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("📄 总文件数", len(all_files))
+        
+        with col2:
+            total_size = sum(f.get('size', 0) for f in all_files)
+            if total_size > 1024 * 1024:
+                size_str = f"{total_size / (1024 * 1024):.2f} MB"
+            elif total_size > 1024:
+                size_str = f"{total_size / 1024:.2f} KB"
+            else:
+                size_str = f"{total_size} B"
+            st.metric("💾 总大小", size_str)
+        
+        with col3:
+            extensions = set(f['extension'] for f in all_files)
+            st.metric("📝 文件类型数", len(extensions))
+        
+        with col4:
+            directories = set(f['directory'] for f in all_files)
+            st.metric("📁 目录数", len(directories))
+        
+        # 文件类型分布
+        st.markdown("### 📊 文件类型分布")
+        ext_counts = {}
+        for f in all_files:
+            ext = f['extension']
+            ext_counts[ext] = ext_counts.get(ext, 0) + 1
+        
+        ext_df = pd.DataFrame([
+            {'扩展名': k, '文件数': v} 
+            for k, v in sorted(ext_counts.items(), key=lambda x: x[1], reverse=True)[:15]
+        ])
+        
+        if not ext_df.empty:
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                st.bar_chart(ext_df.set_index('扩展名'))
+            with col2:
+                st.dataframe(ext_df, use_container_width=True)
+        
+        st.markdown("---")
+        
+        # 文件树展示
+        st.markdown("### 🌲 文件树结构")
+        st.markdown("""
+        <div class="info-box">
+        💡 <strong>使用说明:</strong> 点击文件夹展开/折叠，选择文件查看其提交历史
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # 创建两列布局：左侧文件树，右侧文件历史
+        col_tree, col_history = st.columns([1, 2])
+        
+        with col_tree:
+            st.markdown("#### 📂 文件浏览器")
+            
+            # 使用session state存储展开状态和选中文件
+            if 'expanded_dirs' not in st.session_state:
+                st.session_state.expanded_dirs = set()
+            if 'selected_file' not in st.session_state:
+                st.session_state.selected_file = None
+            
+            def render_tree_item(item, depth=0):
+                """递归渲染文件树项目"""
+                indent = "&nbsp;" * (depth * 4)
+                
+                if item['type'] == 'directory':
+                    dir_path = item['path']
+                    is_expanded = dir_path in st.session_state.expanded_dirs
+                    
+                    # 目录图标
+                    icon = "📂" if is_expanded else "📁"
+                    child_count = len(item.get('children', []))
+                    
+                    # 创建可点击的目录
+                    if st.button(
+                        f"{icon} {item['name']} ({child_count})",
+                        key=f"dir_{dir_path}_{depth}",
+                        use_container_width=True
+                    ):
+                        if is_expanded:
+                            st.session_state.expanded_dirs.discard(dir_path)
+                        else:
+                            st.session_state.expanded_dirs.add(dir_path)
+                        st.rerun()
+                    
+                    # 如果展开，渲染子项
+                    if is_expanded:
+                        for child in item.get('children', []):
+                            render_tree_item(child, depth + 1)
+                else:
+                    # 文件
+                    ext = item.get('extension', '')
+                    # 根据扩展名选择图标
+                    if ext in ['.py']:
+                        icon = "🐍"
+                    elif ext in ['.js', '.ts', '.jsx', '.tsx']:
+                        icon = "📜"
+                    elif ext in ['.html', '.htm']:
+                        icon = "🌐"
+                    elif ext in ['.css', '.scss', '.sass']:
+                        icon = "🎨"
+                    elif ext in ['.json', '.yaml', '.yml', '.toml']:
+                        icon = "⚙️"
+                    elif ext in ['.md', '.txt', '.rst']:
+                        icon = "📝"
+                    elif ext in ['.jpg', '.jpeg', '.png', '.gif', '.svg']:
+                        icon = "🖼️"
+                    else:
+                        icon = "📄"
+                    
+                    # 文件大小
+                    size = item.get('size', 0)
+                    if size > 1024:
+                        size_str = f"{size/1024:.1f}KB"
+                    else:
+                        size_str = f"{size}B"
+                    
+                    is_selected = st.session_state.selected_file == item['path']
+                    button_type = "primary" if is_selected else "secondary"
+                    
+                    if st.button(
+                        f"{icon} {item['name']} ({size_str})",
+                        key=f"file_{item['path']}",
+                        use_container_width=True,
+                        type=button_type
+                    ):
+                        st.session_state.selected_file = item['path']
+                        st.rerun()
+            
+            # 渲染根目录
+            # 默认展开根目录
+            if "/" not in st.session_state.expanded_dirs:
+                st.session_state.expanded_dirs.add("/")
+            
+            for child in file_tree.get('children', []):
+                render_tree_item(child, 0)
+        
+        with col_history:
+            st.markdown("#### 📜 文件提交历史")
+            
+            selected_file = st.session_state.selected_file
+            
+            if selected_file:
+                st.markdown(f"**选中文件:** `{selected_file}`")
+                
+                # 获取文件历史
+                with st.spinner(f"正在加载 {selected_file} 的提交历史..."):
+                    file_history = analyzer.get_file_history(
+                        selected_file, 
+                        max_commits=50,
+                        since_date=config.get('start_date'),
+                        until_date=config.get('end_date')
+                    )
+                
+                if file_history:
+                    st.success(f"找到 {len(file_history)} 条提交记录")
+                    
+                    # 显示历史统计
+                    total_insertions = sum(h['insertions'] for h in file_history)
+                    total_deletions = sum(h['deletions'] for h in file_history)
+                    unique_authors = len(set(h['author'] for h in file_history))
+                    
+                    stat_col1, stat_col2, stat_col3 = st.columns(3)
+                    with stat_col1:
+                        st.metric("✏️ 修改次数", len(file_history))
+                    with stat_col2:
+                        st.metric("➕ 总增加行", total_insertions)
+                    with stat_col3:
+                        st.metric("➖ 总删除行", total_deletions)
+                    
+                    st.markdown(f"**👥 贡献者:** {unique_authors} 人")
+                    
+                    # 显示提交历史表格
+                    st.markdown("##### 提交记录")
+                    
+                    history_data = []
+                    for h in file_history:
+                        # 清理消息显示
+                        message = h['message']
+                        if len(message) > 60:
+                            message = message[:57] + "..."
+                        
+                        history_data.append({
+                            '提交': h['hash'],
+                            '作者': h['author'],
+                            '日期': h['date'].strftime('%Y-%m-%d %H:%M') if h['date'] else '',
+                            '变更': f"+{h['insertions']} -{h['deletions']}",
+                            '说明': message
+                        })
+                    
+                    history_df = pd.DataFrame(history_data)
+                    st.dataframe(history_df, use_container_width=True, height=400)
+                    
+                    # 显示作者贡献分布
+                    st.markdown("##### 作者贡献分布")
+                    author_commits = {}
+                    for h in file_history:
+                        author = h['author']
+                        author_commits[author] = author_commits.get(author, 0) + 1
+                    
+                    author_df = pd.DataFrame([
+                        {'作者': k, '提交数': v}
+                        for k, v in sorted(author_commits.items(), key=lambda x: x[1], reverse=True)
+                    ])
+                    
+                    if not author_df.empty:
+                        st.bar_chart(author_df.set_index('作者'))
+                    
+                else:
+                    st.info(f"未找到 {selected_file} 的提交历史")
+            else:
+                st.info("👈 请在左侧文件树中选择一个文件查看其提交历史")
+        
+        # 目录统计
+        st.markdown("---")
+        st.markdown("### 📁 目录统计")
+        
+        dir_stats = analyzer.get_directory_stats(config.get('branch', 'HEAD'))
+        
+        if dir_stats:
+            dir_data = []
+            for d in dir_stats[:20]:  # 显示前20个目录
+                dir_data.append({
+                    '目录': d['directory'],
+                    '文件数': d['file_count'],
+                    '大小': f"{d['total_size'] / 1024:.1f} KB" if d['total_size'] > 1024 else f"{d['total_size']} B",
+                    '主要类型': ', '.join(list(d['top_extensions'].keys())[:3])
+                })
+            
+            dir_df = pd.DataFrame(dir_data)
+            st.dataframe(dir_df, use_container_width=True)
+        
+    except Exception as e:
+        st.error(f"文件树分析出错: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
 
 
 def main():
@@ -898,10 +1468,10 @@ def main():
             )
         
         # 创建选项卡
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs([
             "📝 提交分析", "👥 作者分析", "⏰时间分析", 
             "🔀 合并分析", "📁 文件分析", "🌳 分支分析",
-            "🌐 分支关系图", "🔀 合并方向历史", "🔄 MR管理"
+            "🌐 分支关系图", "🔀 合并方向历史", "🌲 文件树", "🔍 Code Review统计", "🔄 MR管理"
         ])
         
         with tab1:
@@ -929,6 +1499,12 @@ def main():
             display_merge_direction_analysis(analyzer, visualizer)
         
         with tab9:
+            display_file_tree_analysis(analyzer, config)
+        
+        with tab10:
+            display_code_review_analysis(analyzer, config)
+        
+        with tab11:
             display_mr_management(analyzer, config)
             
     except ValueError as e:
@@ -1095,15 +1671,59 @@ Token前缀: {github_token[:10] + '...' if github_token and len(github_token) > 
     # 仓库选择和配置
     st.markdown("#### 📁 仓库设置")
     
-    col1, col2, col3 = st.columns([2, 1, 1])
+    # 仓库输入方式选择
+    col_method, col_input = st.columns([1, 3])
     
-    with col1:
-        repo_input = st.text_input(
-            "GitHub仓库",
-            value="",
-            placeholder="例如: owner/repo 或 https://github.com/owner/repo",
-            help="输入要管理的GitHub仓库"
+    with col_method:
+        mr_input_method = st.selectbox(
+            "输入方式",
+            ["手动输入", "最近使用"],
+            key="mr_input_method",
+            help="选择仓库输入方式"
         )
+    
+    with col_input:
+        if mr_input_method == "手动输入":
+            repo_input = st.text_input(
+                "GitHub仓库",
+                value="",
+                placeholder="例如: owner/repo 或 https://github.com/owner/repo",
+                help="输入要管理的GitHub仓库",
+                key="mr_repo_input"
+            )
+        else:  # 最近使用
+            history_manager = get_repo_history_manager()
+            recent_repos = history_manager.get_repos_by_type("remote")  # 只显示远程仓库
+            
+            if recent_repos:
+                display_options = []
+                repo_paths = []
+                
+                for repo in recent_repos:
+                    display_name = f"🌐 {repo['name']} - {repo['path']}"
+                    display_options.append(display_name)
+                    repo_paths.append(repo["path"])
+                
+                selected_index = st.selectbox(
+                    "选择远程仓库",
+                    range(len(display_options)),
+                    format_func=lambda i: display_options[i],
+                    help="从最近使用的远程仓库中选择",
+                    key="mr_recent_select"
+                )
+                
+                repo_input = repo_paths[selected_index]
+            else:
+                st.info("📭 暂无最近使用的远程仓库")
+                repo_input = st.text_input(
+                    "GitHub仓库",
+                    value="",
+                    placeholder="例如: owner/repo",
+                    help="输入GitHub仓库地址",
+                    key="mr_repo_fallback"
+                )
+    
+    col2, col3 = st.columns([1, 1])
     
     with col2:
         days_range = st.number_input(
@@ -1151,6 +1771,9 @@ Token前缀: {github_token[:10] + '...' if github_token and len(github_token) > 
                     repo_info = github_client.get_repository_info(repo_input)
                     st.session_state['current_repo_info'] = repo_info
                     progress_container.success(f"✅ 仓库验证成功: {repo_info['full_name']}")
+                    
+                    # 添加到仓库历史记录
+                    add_to_recent_repos(repo_input)
                 except Exception as e:
                     progress_container.error(f"❌ 仓库访问失败: {str(e)}")
                     
