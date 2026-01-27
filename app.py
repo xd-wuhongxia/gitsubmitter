@@ -31,6 +31,25 @@ def load_custom_css():
     """加载自定义CSS样式"""
     st.markdown("""
     <style>
+    :root {
+        --app-font: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei',
+                     'Source Han Sans SC', 'WenQuanYi Micro Hei', 'Noto Sans CJK SC',
+                     'Helvetica Neue', Helvetica, Arial, sans-serif;
+    }
+
+    html, body, [class^="css"], [class*="css"], .stMarkdown,
+    .stButton button, .stSelectbox div, .stMetric, .stRadio, .stCheckbox > label,
+    .stTextInput input, .stNumberInput input, .stDateInput input,
+    .stMultiSelect div, .stDataFrame, .stTabs button {
+        font-family: var(--app-font) !important;
+    }
+
+    /* 兼容包含 emoji 的元素，避免渲染成方块 */
+    .emoji, .stMarkdown span, .stMetric label, .stMetric span,
+    .metric-card, .sidebar-section {
+        font-family: var(--app-font) !important;
+    }
+
     .main-header {
         font-size: 3rem;
         color: #1f77b4;
