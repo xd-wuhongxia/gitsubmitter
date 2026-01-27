@@ -7,6 +7,8 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta, date
 import os
+import base64
+from functools import lru_cache
 from pathlib import Path
 import git
 
@@ -27,20 +29,47 @@ def init_page_config():
     )
 
 
+@lru_cache(maxsize=1)
+def _load_embedded_font() -> str:
+    """读取嵌入式字体，返回base64字符串"""
+    font_path = Path(__file__).parent / "assets" / "fonts" / "NotoSansSC-Subset.woff2"
+    if not font_path.exists():
+        return ""
+
+    try:
+        return base64.b64encode(font_path.read_bytes()).decode("utf-8")
+    except Exception:
+        return ""
+
+
 def load_custom_css():
     """加载自定义CSS样式"""
-    st.markdown("""
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap');
-    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Mono:wght@400;500&display=swap');
+    font_data_base64 = _load_embedded_font()
+    font_face_css = ""
+    if font_data_base64:
+        font_face_css = f"""
+        @font-face {{
+            font-family: 'AppCN';
+            src: url(data:font/woff2;base64,{font_data_base64}) format('woff2');
+            font-weight: 400;
+            font-style: normal;
+            font-display: swap;
+        }}
+        """
 
-    :root {
-        --app-font: 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC',
-                     'Source Han Sans SC', 'WenQuanYi Micro Hei', 'Microsoft YaHei',
-                     'Helvetica Neue', Helvetica, Arial, sans-serif;
-        --app-mono-font: 'Noto Sans Mono', 'Noto Sans SC', 'Source Code Pro',
-                          'PingFang SC', 'Microsoft YaHei', monospace;
-    }
+    st.markdown(f"""
+    <style>
+    {font_face_css}
+
+    :root {{
+        --app-font: 'AppCN', 'PingFang SC', 'Microsoft YaHei',
+                     'Source Han Sans SC', 'Noto Sans CJK SC', 'WenQuanYi Micro Hei',
+                     'Hiragino Sans GB', 'Heiti SC', 'Heiti TC', 'SimHei',
+                     'Arial Unicode MS', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+        --app-mono-font: 'AppCN', 'JetBrains Mono', 'Fira Code', 'Cascadia Code',
+                          'Consolas', 'Source Code Pro', 'SFMono-Regular', 'Menlo',
+                          'Monaco', 'Courier New', monospace;
+    }}
 
     html, body, .stApp, .stMarkdown, .stSidebar,
     [data-testid="stSidebar"], [data-testid="stAppViewContainer"],
@@ -52,55 +81,55 @@ def load_custom_css():
     div[data-testid="stMarkdownContainer"] *,
     div[data-testid="metric-container"] *,
     div[data-testid="stVerticalBlock"] *,
-    .metric-card, .sidebar-section, .info-box, .warning-box {
+    .metric-card, .sidebar-section, .info-box, .warning-box {{
         font-family: var(--app-font) !important;
-    }
+    }}
 
     pre, code, .stCodeBlock, div[data-testid="stCodeBlock"] *,
     div[data-testid="stJson"] *, .stMarkdown code,
     div[data-testid="stMarkdownContainer"] code,
-    .stTextArea textarea {
+    .stTextArea textarea {{
         font-family: var(--app-mono-font) !important;
-    }
+    }}
 
-    .main-header {
+    .main-header {{
         font-size: 3rem;
         color: #1f77b4;
         text-align: center;
         margin-bottom: 2rem;
         font-weight: bold;
-    }
+    }}
     
-    .metric-card {
+    .metric-card {{
         background-color: #f0f2f6;
         padding: 1rem;
         border-radius: 10px;
         border-left: 4px solid #1f77b4;
         margin: 0.5rem 0;
-    }
+    }}
     
-    .sidebar-section {
+    .sidebar-section {{
         margin: 1rem 0;
         padding: 1rem;
         background-color: #f8f9fa;
         border-radius: 8px;
-    }
+    }}
     
-    .info-box {
+    .info-box {{
         background-color: #e7f3ff;
         padding: 1rem;
         border-radius: 8px;
         border-left: 4px solid #2196F3;
         margin: 1rem 0;
-    }
+    }}
     
-    .warning-box {
+    .warning-box {{
         background-color: #fff3cd;
         padding: 1rem;
         border-radius: 8px;
         border-left: 4px solid #ffc107;
         margin: 1rem 0;
-    }
+    }}
     </style>
     """, unsafe_allow_html=True)
 
