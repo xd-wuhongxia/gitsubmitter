@@ -31,23 +31,36 @@ def load_custom_css():
     """加载自定义CSS样式"""
     st.markdown("""
     <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Mono:wght@400;500&display=swap');
+
     :root {
-        --app-font: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei',
-                     'Source Han Sans SC', 'WenQuanYi Micro Hei', 'Noto Sans CJK SC',
+        --app-font: 'Noto Sans SC', 'Noto Sans CJK SC', 'PingFang SC',
+                     'Source Han Sans SC', 'WenQuanYi Micro Hei', 'Microsoft YaHei',
                      'Helvetica Neue', Helvetica, Arial, sans-serif;
+        --app-mono-font: 'Noto Sans Mono', 'Noto Sans SC', 'Source Code Pro',
+                          'PingFang SC', 'Microsoft YaHei', monospace;
     }
 
-    html, body, [class^="css"], [class*="css"], .stMarkdown,
-    .stButton button, .stSelectbox div, .stMetric, .stRadio, .stCheckbox > label,
+    html, body, .stApp, .stMarkdown, .stSidebar,
+    [data-testid="stSidebar"], [data-testid="stAppViewContainer"],
+    [class^="css"], [class*="css"], .stButton button, .stSelectbox div,
+    .stMetric, .stRadio, .stCheckbox > label, .stExpander,
+    .stAlert, .stDataFrame, .stTabs button, .stTabs span,
     .stTextInput input, .stNumberInput input, .stDateInput input,
-    .stMultiSelect div, .stDataFrame, .stTabs button {
+    .stMultiSelect div, [data-baseweb="select"] *,
+    div[data-testid="stMarkdownContainer"] *,
+    div[data-testid="metric-container"] *,
+    div[data-testid="stVerticalBlock"] *,
+    .metric-card, .sidebar-section, .info-box, .warning-box {
         font-family: var(--app-font) !important;
     }
 
-    /* 兼容包含 emoji 的元素，避免渲染成方块 */
-    .emoji, .stMarkdown span, .stMetric label, .stMetric span,
-    .metric-card, .sidebar-section {
-        font-family: var(--app-font) !important;
+    pre, code, .stCodeBlock, div[data-testid="stCodeBlock"] *,
+    div[data-testid="stJson"] *, .stMarkdown code,
+    div[data-testid="stMarkdownContainer"] code,
+    .stTextArea textarea {
+        font-family: var(--app-mono-font) !important;
     }
 
     .main-header {

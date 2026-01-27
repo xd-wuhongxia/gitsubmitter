@@ -6,5 +6,5 @@
 ## 功能要点
 - 应用支持本地路径、远程 Git URL 以及 `owner/repo` 简写输入，远程仓库会被临时克隆后进行统计分析。
 - “MR 管理”依赖 GitHub Personal Access Token（需要 `public_repo` 或 `repo` 权限），获取到的 PR 数据会存储在 `mr_data.db` 中，方便后续查询和操作历史追踪。
-- 前端通过全局 CSS 强制使用 `Noto Sans SC / PingFang SC / Microsoft YaHei` 等中文友好字体堆栈，避免不同平台出现中文字符渲染为方块。
+- 前端通过全局 CSS 强制加载 Google Fonts 的 `Noto Sans SC`/`Noto Sans Mono` 并设置多重中文友好字体堆栈，确保普通文本、代码块都不会渲染成方块。
 
